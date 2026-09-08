@@ -1,0 +1,33 @@
+{
+  "description": "Example YOLOX+ByteTrack-style records consumed by TrackingInterface",
+  "frames": [
+    {
+      "timestamp": 1710000000.0,
+      "camera_id": "cam_01",
+      "tracks": [
+        {
+          "camera_id": "cam_01",
+          "object_id": 17,
+          "object_type": "person",
+          "bbox": [80, 500, 126, 620],
+          "confidence": 0.91,
+          "timestamp": 1710000000.0
+        }
+      ]
+    },
+    {
+      "timestamp": 1710000001.5,
+      "camera_id": "cam_01",
+      "tracks": [
+        {
+          "camera_id": "cam_01",
+          "object_id": 17,
+          "object_type": "person",
+          "bbox": [900, 500, 946, 640],
+          "confidence": 0.93,
+          "timestamp": 1710000001.5
+        }
+      ]
+    }
+  ]
+}

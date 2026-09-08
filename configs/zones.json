@@ -1,0 +1,56 @@
+{
+  "zones": [
+    {
+      "zone_id": "zone_restricted_gate",
+      "camera_id": "cam_01",
+      "name": "Restricted Gate",
+      "zone_type": "restricted",
+      "polygon": [
+        [704, 324],
+        [1177, 324],
+        [1216, 684],
+        [665, 684]
+      ],
+      "enabled": true
+    },
+    {
+      "zone_id": "zone_warning_approach",
+      "camera_id": "cam_01",
+      "name": "Warning Approach",
+      "zone_type": "warning",
+      "polygon": [
+        [358, 288],
+        [691, 288],
+        [665, 684],
+        [230, 684]
+      ],
+      "enabled": true
+    },
+    {
+      "zone_id": "zone_safe_patrol",
+      "camera_id": "cam_01",
+      "name": "Safe Patrol",
+      "zone_type": "safe",
+      "polygon": [
+        [25, 360],
+        [332, 360],
+        [230, 684],
+        [25, 684]
+      ],
+      "enabled": true
+    },
+    {
+      "zone_id": "zone_restricted_cam02",
+      "camera_id": "cam_02",
+      "name": "Cam02 Restricted",
+      "zone_type": "restricted",
+      "polygon": [
+        [250, 380],
+        [500, 380],
+        [520, 540],
+        [230, 540]
+      ],
+      "enabled": true
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "event_type": "GEOFENCE_ENTER",
+  "camera_id": "cam_01",
+  "object_id": "17",
+  "object_type": "person",
+  "zone_id": "zone_restricted_gate",
+  "zone_name": "Restricted Gate",
+  "zone_type": "restricted",
+  "timestamp": 1710000001.5,
+  "bounding_box": [900.0, 500.0, 946.0, 640.0],
+  "ground_contact_position": [923.0, 640.0],
+  "confidence": 0.93,
+  "confirmed_status": "INSIDE"
+}
