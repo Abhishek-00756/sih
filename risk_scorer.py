@@ -1,12 +1,14 @@
 """Context-aware threat scores so operators see high-risk alerts first.
 
-Base 10. +40 inbound tripwire. +20 night (20:00-06:00). +30 loitering over 60s.
+Base 10. +40 inbound tripwire. +20 night (20:00-06:00 local time).
++30 loitering over 60s.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import List, Optional, Sequence, Tuple
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 RiskResult = Tuple[int, List[str]]
 
@@ -24,16 +26,32 @@ class RiskScorer:
         night_start_hour: int = 20,
         night_end_hour: int = 6,
         loiter_seconds: float = LOITER_SECONDS,
+        timezone_name: str = "Asia/Kolkata",
     ) -> None:
+        if not 0 <= int(night_start_hour) <= 23:
+            raise ValueError("night_start_hour must be between 0 and 23")
+        if not 0 <= int(night_end_hour) <= 23:
+            raise ValueError("night_end_hour must be between 0 and 23")
+        if loiter_seconds <= 0:
+            raise ValueError("loiter_seconds must be positive")
         self.night_start_hour = int(night_start_hour)
         self.night_end_hour = int(night_end_hour)
         self.loiter_seconds = float(loiter_seconds)
+        self.timezone_name = str(timezone_name)
+        try:
+            self.timezone = ZoneInfo(self.timezone_name)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(f"unknown timezone: {self.timezone_name}") from exc
+
+    def _local_hour(self, timestamp: Optional[float] = None) -> int:
+        if timestamp is None:
+            current = datetime.now(self.timezone)
+        else:
+            current = datetime.fromtimestamp(float(timestamp), tz=self.timezone)
+        return current.hour
 
     def is_night(self, timestamp: Optional[float] = None) -> bool:
-        if timestamp is None:
-            hour = datetime.now().hour
-        else:
-            hour = datetime.fromtimestamp(float(timestamp), tz=timezone.utc).hour
+        hour = self._local_hour(timestamp)
         start = self.night_start_hour
         end = self.night_end_hour
         if start <= end:
