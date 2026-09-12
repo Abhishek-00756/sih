@@ -13,13 +13,16 @@ if str(ROOT) not in sys.path:
 from risk_scorer import RiskScorer
 
 
-def _ts(hour: int) -> float:
-    return datetime(2026, 1, 15, hour, 0, tzinfo=timezone.utc).timestamp()
+def _ts_ist(hour: int) -> float:
+    """Build a timestamp for the requested hour in Asia/Kolkata."""
+    from zoneinfo import ZoneInfo
+
+    return datetime(2026, 1, 15, hour, 0, tzinfo=ZoneInfo("Asia/Kolkata")).timestamp()
 
 
 def test_base_score_daytime():
     scorer = RiskScorer()
-    score, reasons = scorer.score(timestamp=_ts(12))
+    score, reasons = scorer.score(timestamp=_ts_ist(12))
     assert score == 10
     assert reasons == ["base"]
     assert scorer.label(score) == "LOW"
@@ -29,7 +32,7 @@ def test_inbound_night_loiter_stacks():
     scorer = RiskScorer()
     score, reasons = scorer.score(
         direction="INBOUND",
-        timestamp=_ts(22),
+        timestamp=_ts_ist(22),
         dwell_time=90.0,
     )
     assert score == 100
@@ -41,6 +44,19 @@ def test_inbound_night_loiter_stacks():
 
 def test_night_window_wraps_midnight():
     scorer = RiskScorer(night_start_hour=20, night_end_hour=6)
-    assert scorer.is_night(_ts(21)) is True
-    assert scorer.is_night(_ts(3)) is True
-    assert scorer.is_night(_ts(12)) is False
+    assert scorer.is_night(_ts_ist(21)) is True
+    assert scorer.is_night(_ts_ist(3)) is True
+    assert scorer.is_night(_ts_ist(12)) is False
+
+
+def test_utc_timestamp_is_converted_to_ist_before_night_check():
+    scorer = RiskScorer()
+    # 19:00 UTC is 00:30 IST on the following day, so it is night.
+    timestamp = datetime(2026, 1, 15, 19, 0, tzinfo=timezone.utc).timestamp()
+    assert scorer.is_night(timestamp) is True
+
+
+def test_custom_timezone_is_supported():
+    scorer = RiskScorer(timezone_name="UTC")
+    timestamp = datetime(2026, 1, 15, 21, 0, tzinfo=timezone.utc).timestamp()
+    assert scorer.is_night(timestamp) is True
