@@ -7,6 +7,10 @@ person_class: 0
 track_classes: [0, 2, 3, 5, 7]
 enable_loitering: true
 dwell_threshold: 30.0
+enable_anpr: true
+anpr_min_confidence: 0.5
+anpr_min_width: 150
+anpr_min_height: 150
 headless: true
 display: false
 geofence_zones: configs/zones.json

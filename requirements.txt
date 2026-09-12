@@ -11,5 +11,6 @@ pytest>=7.0.0
 Cython>=3.0.0
 gdown>=5.0.0
 tensorboard>=2.14.0
+easyocr>=1.7.0
 # OSNet Re-ID backbone (requires python3-dev / Cython)
 # pip install git+https://github.com/KaiyangZhou/deep-person-reid.git
