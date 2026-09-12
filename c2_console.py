@@ -65,6 +65,7 @@ INDEX_HTML = """<!DOCTYPE html>
         <option value="">All</option>
         <option>Geofence Intrusion</option>
         <option>GEOFENCE_ENTER</option>
+        <option>Loitering</option>
       </select>
       <button id="search">Search evidence</button>
       <div class="list" id="list"></div>

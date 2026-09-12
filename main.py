@@ -23,6 +23,12 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from activity_analyzer import (
+    COCO_CLASSES,
+    PERSON_CLASS,
+    TRACK_CLASSES,
+    ActivityAnalyzer,
+)
 from alert_logger import AlertLogger
 from extractor import PersonFeatureExtractor
 from gallery_manager import GlobalGalleryManager
@@ -163,7 +169,8 @@ def run_multi_camera_tracking(
     max_time_diff: float = 120.0,
     detector_weights: str = "yolov8n.pt",
     osnet_model: str = "osnet_x1_0",
-    person_class: int = 0,
+    person_class: int = PERSON_CLASS,
+    track_classes: Optional[Iterable[int]] = None,
     headless: bool = False,
     display: bool = False,
     max_frames: int = 0,
@@ -177,8 +184,12 @@ def run_multi_camera_tracking(
     cooldown_seconds: float = 60.0,
     alert_db: Optional[Path] = None,
     snapshot_dir: Optional[Path] = None,
+    dwell_threshold: float = 30.0,
+    enable_loitering: bool = True,
 ) -> Dict[str, object]:
     from ultralytics import YOLO
+
+    detect_classes = list(track_classes) if track_classes is not None else list(TRACK_CLASSES)
 
     # One detector/tracker per camera so ByteTrack IDs never mix across streams.
     detectors = {cam_id: YOLO(detector_weights) for cam_id in camera_sources}
@@ -192,11 +203,13 @@ def run_multi_camera_tracking(
 
     zone_store, geo_engine, geo_iface = (None, None, None)
     alert_logger: Optional[AlertLogger] = None
-    if enable_geofence:
-        zone_store, geo_engine, geo_iface = _maybe_geofence(geofence_zones)
+    analyzer: Optional[ActivityAnalyzer] = None
+    if enable_geofence or enable_loitering:
         db_path = alert_db or ROOT / "border_alerts.db"
         snap_path = snapshot_dir or ROOT / "alert_snapshots"
         alert_logger = AlertLogger(db_path=db_path, snapshot_dir=snap_path)
+    if enable_geofence:
+        zone_store, geo_engine, geo_iface = _maybe_geofence(geofence_zones)
         if overlay_geofence is None:
             overlay_geofence = _overlay_geofence(
                 geofence_cfg or {},
@@ -206,6 +219,8 @@ def run_multi_camera_tracking(
             )
         elif overlay_geofence.logger is None:
             overlay_geofence.logger = alert_logger
+    if enable_loitering:
+        analyzer = ActivityAnalyzer(dwell_threshold=dwell_threshold, logger=alert_logger)
 
     caps = _open_captures(camera_sources)
     writers: Dict[str, cv2.VideoWriter] = {}
@@ -216,6 +231,7 @@ def run_multi_camera_tracking(
     frame_idx = 0
     events_emitted = 0
     assignments = 0
+    loitering_alerts = 0
 
     try:
         while True:
@@ -233,38 +249,85 @@ def run_multi_camera_tracking(
                 results = detectors[cam_id].track(
                     frame,
                     persist=True,
-                    classes=[person_class],
+                    classes=detect_classes,
                     tracker="bytetrack.yaml",
                     verbose=False,
                 )
 
                 geo_records = []
+                current_active_ids: List[Union[int, str]] = []
                 if results and results[0].boxes is not None and results[0].boxes.id is not None:
                     boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
                     track_ids = results[0].boxes.id.cpu().numpy().astype(int)
                     scores = results[0].boxes.conf.cpu().numpy()
+                    class_ids = (
+                        results[0].boxes.cls.cpu().numpy().astype(int)
+                        if results[0].boxes.cls is not None
+                        else np.full(len(track_ids), person_class, dtype=int)
+                    )
 
-                    for box, local_id, score in zip(boxes, track_ids, scores):
+                    for box, local_id, score, cls_id in zip(boxes, track_ids, scores, class_ids):
                         x1, y1, x2, y2 = box
                         h, w, _ = frame.shape
                         x1, y1 = max(0, x1), max(0, y1)
                         x2, y2 = min(w, x2), min(h, y2)
-                        person_crop = frame[y1:y2, x1:x2]
+                        entity_type = COCO_CLASSES.get(int(cls_id), "Unknown")
+                        bbox = (x1, y1, x2, y2)
 
-                        embedding = extractor.extract(person_crop)
-                        if embedding is None:
-                            continue
+                        if int(cls_id) == person_class:
+                            person_crop = frame[y1:y2, x1:x2]
+                            embedding = extractor.extract(person_crop)
+                            if embedding is None:
+                                continue
 
-                        result = gallery.match_or_register_detailed(
-                            camera_id=cam_id,
-                            local_id=int(local_id),
-                            embedding=embedding,
-                            timestamp=current_timestamp,
-                        )
-                        assignments += 1
-                        color = _color_for_id(result.global_id)
+                            result = gallery.match_or_register_detailed(
+                                camera_id=cam_id,
+                                local_id=int(local_id),
+                                embedding=embedding,
+                                timestamp=current_timestamp,
+                            )
+                            assignments += 1
+                            display_id: Union[int, str] = result.global_id
+                            entity_id: Union[int, str] = result.global_id
+                            color = _color_for_id(result.global_id)
+                            label = f"{entity_type} GID {result.global_id} L{local_id}"
+                            if overlay_geofence is not None:
+                                overlay_geofence.check_intrusion(
+                                    frame,
+                                    bbox,
+                                    result.global_id,
+                                    camera_id=geo_cam,
+                                    timestamp=current_timestamp,
+                                    source_camera_id=cam_id,
+                                )
+                            geo_records.append(
+                                {
+                                    "camera_id": cam_id,
+                                    "object_id": result.global_id,
+                                    "object_type": "person",
+                                    "bbox": [x1, y1, x2, y2],
+                                    "confidence": float(score),
+                                    "timestamp": current_timestamp,
+                                }
+                            )
+                        else:
+                            entity_id = f"V-{int(local_id)}"
+                            display_id = entity_id
+                            color = (255, 0, 0)
+                            label = f"{entity_type} {display_id}"
+                            geo_records.append(
+                                {
+                                    "camera_id": cam_id,
+                                    "object_id": entity_id,
+                                    "object_type": entity_type.lower(),
+                                    "bbox": [x1, y1, x2, y2],
+                                    "confidence": float(score),
+                                    "timestamp": current_timestamp,
+                                }
+                            )
+
+                        current_active_ids.append(entity_id)
                         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                        label = f"GID {result.global_id} L{local_id}"
                         cv2.putText(
                             frame,
                             label,
@@ -274,25 +337,20 @@ def run_multi_camera_tracking(
                             color,
                             2,
                         )
-                        if overlay_geofence is not None:
-                            overlay_geofence.check_intrusion(
+                        if analyzer is not None:
+                            analyzer.analyze_behavior(
                                 frame,
-                                (x1, y1, x2, y2),
-                                result.global_id,
-                                camera_id=geo_cam,
+                                bbox,
+                                entity_id,
+                                entity_type=entity_type,
+                                camera_id=cam_id,
                                 timestamp=current_timestamp,
-                                source_camera_id=cam_id,
+                                draw=True,
                             )
-                        geo_records.append(
-                            {
-                                "camera_id": cam_id,
-                                "object_id": result.global_id,
-                                "object_type": "person",
-                                "bbox": [x1, y1, x2, y2],
-                                "confidence": float(score),
-                                "timestamp": current_timestamp,
-                            }
-                        )
+
+                if analyzer is not None:
+                    analyzer.cleanup_stale_tracks(current_active_ids, camera_id=cam_id)
+                    loitering_alerts += len(analyzer.pop_alerts())
 
                 if enable_geofence and geo_engine is not None and geo_iface is not None:
                     tracks = geo_iface.parse_frame(
@@ -364,6 +422,7 @@ def run_multi_camera_tracking(
         "assignments": assignments,
         "active_global_ids": gallery.active_count(),
         "geofence_events": events_emitted,
+        "loitering_alerts": loitering_alerts,
         "gallery": gallery.snapshot(),
     }
     LOGGER.info("Done: %s", json.dumps({k: v for k, v in summary.items() if k != "gallery"}))
@@ -387,6 +446,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--max-frames", type=int, default=0)
     parser.add_argument("--fallback-extractor", action="store_true")
     parser.add_argument("--enable-geofence", action="store_true")
+    parser.add_argument("--dwell-threshold", type=float, default=None)
+    parser.add_argument("--no-loitering", action="store_true")
     parser.add_argument("--cooldown", type=float, default=None)
     parser.add_argument("--alert-db", default="")
     parser.add_argument("--snapshot-dir", default="")
@@ -418,7 +479,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         max_time_diff=float(args.max_time_diff or cfg.get("max_time_diff", 120.0)),
         detector_weights=args.weights or cfg.get("detector_weights", "yolov8n.pt"),
         osnet_model=cfg.get("osnet_model", "osnet_x1_0"),
-        person_class=int(cfg.get("person_class", 0)),
+        person_class=int(cfg.get("person_class", PERSON_CLASS)),
+        track_classes=cfg.get("track_classes", list(TRACK_CLASSES)),
         headless=bool(args.headless or cfg.get("headless", False)),
         display=bool(args.display or cfg.get("display", False)),
         max_frames=args.max_frames,
@@ -431,6 +493,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         cooldown_seconds=float(args.cooldown or cfg.get("geofence_cooldown", 60.0)),
         alert_db=Path(args.alert_db) if args.alert_db else Path(cfg.get("alert_db", ROOT / "border_alerts.db")),
         snapshot_dir=Path(args.snapshot_dir) if args.snapshot_dir else Path(cfg.get("snapshot_dir", ROOT / "alert_snapshots")),
+        dwell_threshold=float(args.dwell_threshold if args.dwell_threshold is not None else cfg.get("dwell_threshold", 30.0)),
+        enable_loitering=bool(cfg.get("enable_loitering", True)) and not args.no_loitering,
     )
     return 0
 

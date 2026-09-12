@@ -4,6 +4,9 @@ local_track_ttl: 8.0
 detector_weights: yolov8n.pt
 osnet_model: osnet_x1_0
 person_class: 0
+track_classes: [0, 2, 3, 5, 7]
+enable_loitering: true
+dwell_threshold: 30.0
 headless: true
 display: false
 geofence_zones: configs/zones.json
