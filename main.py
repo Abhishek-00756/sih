@@ -30,6 +30,7 @@ from activity_analyzer import (
     ActivityAnalyzer,
 )
 from alert_logger import AlertLogger
+from anpr_manager import ANPRManager
 from extractor import PersonFeatureExtractor
 from gallery_manager import GlobalGalleryManager
 from geofence_manager import GeofenceManager
@@ -186,6 +187,11 @@ def run_multi_camera_tracking(
     snapshot_dir: Optional[Path] = None,
     dwell_threshold: float = 30.0,
     enable_loitering: bool = True,
+    enable_anpr: bool = True,
+    anpr_min_confidence: float = 0.5,
+    anpr_min_width: int = 150,
+    anpr_min_height: int = 150,
+    anpr_gpu: Optional[bool] = None,
 ) -> Dict[str, object]:
     from ultralytics import YOLO
 
@@ -221,6 +227,12 @@ def run_multi_camera_tracking(
             overlay_geofence.logger = alert_logger
     if enable_loitering:
         analyzer = ActivityAnalyzer(dwell_threshold=dwell_threshold, logger=alert_logger)
+
+    anpr: Optional[ANPRManager] = None
+    known_plates: Dict[str, str] = {}
+    plates_recognized = 0
+    if enable_anpr:
+        anpr = ANPRManager(min_confidence=anpr_min_confidence, gpu=anpr_gpu)
 
     caps = _open_captures(camera_sources)
     writers: Dict[str, cv2.VideoWriter] = {}
@@ -313,8 +325,36 @@ def run_multi_camera_tracking(
                         else:
                             entity_id = f"V-{int(local_id)}"
                             display_id = entity_id
-                            color = (255, 0, 0)
-                            label = f"{entity_type} {display_id}"
+                            color = (255, 165, 0)
+                            plate_key = f"{cam_id}:{entity_id}"
+                            plate_text = known_plates.get(plate_key)
+                            if (
+                                anpr is not None
+                                and plate_text is None
+                                and anpr.crop_is_readable(
+                                    x2 - x1,
+                                    y2 - y1,
+                                    min_width=anpr_min_width,
+                                    min_height=anpr_min_height,
+                                )
+                            ):
+                                vehicle_crop = frame[y1:y2, x1:x2]
+                                text, conf = anpr.read_license_plate(vehicle_crop)
+                                if text:
+                                    known_plates[plate_key] = text
+                                    plate_text = text
+                                    plates_recognized += 1
+                                    LOGGER.info(
+                                        "[ANPR] Camera %s recognized plate %s (conf=%.2f) on %s",
+                                        cam_id,
+                                        plate_text,
+                                        conf,
+                                        entity_id,
+                                    )
+                            if plate_text:
+                                label = f"Plate: {plate_text}"
+                            else:
+                                label = f"{entity_type} {display_id}"
                             geo_records.append(
                                 {
                                     "camera_id": cam_id,
@@ -323,6 +363,7 @@ def run_multi_camera_tracking(
                                     "bbox": [x1, y1, x2, y2],
                                     "confidence": float(score),
                                     "timestamp": current_timestamp,
+                                    "plate": plate_text,
                                 }
                             )
 
@@ -423,9 +464,14 @@ def run_multi_camera_tracking(
         "active_global_ids": gallery.active_count(),
         "geofence_events": events_emitted,
         "loitering_alerts": loitering_alerts,
+        "plates_recognized": plates_recognized,
+        "known_plates": dict(known_plates),
         "gallery": gallery.snapshot(),
     }
-    LOGGER.info("Done: %s", json.dumps({k: v for k, v in summary.items() if k != "gallery"}))
+    LOGGER.info(
+        "Done: %s",
+        json.dumps({k: v for k, v in summary.items() if k not in ("gallery", "known_plates")}),
+    )
     return summary
 
 
@@ -448,6 +494,9 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--enable-geofence", action="store_true")
     parser.add_argument("--dwell-threshold", type=float, default=None)
     parser.add_argument("--no-loitering", action="store_true")
+    parser.add_argument("--enable-anpr", action="store_true")
+    parser.add_argument("--no-anpr", action="store_true")
+    parser.add_argument("--anpr-min-confidence", type=float, default=None)
     parser.add_argument("--cooldown", type=float, default=None)
     parser.add_argument("--alert-db", default="")
     parser.add_argument("--snapshot-dir", default="")
@@ -495,6 +544,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         snapshot_dir=Path(args.snapshot_dir) if args.snapshot_dir else Path(cfg.get("snapshot_dir", ROOT / "alert_snapshots")),
         dwell_threshold=float(args.dwell_threshold if args.dwell_threshold is not None else cfg.get("dwell_threshold", 30.0)),
         enable_loitering=bool(cfg.get("enable_loitering", True)) and not args.no_loitering,
+        enable_anpr=bool(args.enable_anpr or cfg.get("enable_anpr", True)) and not args.no_anpr,
+        anpr_min_confidence=float(
+            args.anpr_min_confidence
+            if args.anpr_min_confidence is not None
+            else cfg.get("anpr_min_confidence", 0.5)
+        ),
+        anpr_min_width=int(cfg.get("anpr_min_width", 150)),
+        anpr_min_height=int(cfg.get("anpr_min_height", 150)),
+        anpr_gpu=cfg.get("anpr_gpu"),
     )
     return 0
 
