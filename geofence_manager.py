@@ -87,6 +87,7 @@ class GeofenceManager:
         zone_points: Optional[Sequence[Sequence[float]]] = None,
         cooldown_seconds: float = 60.0,
         zones: Optional[Iterable[RestrictedZone]] = None,
+        logger: Optional[object] = None,
     ) -> None:
         self.cooldown_seconds = float(cooldown_seconds)
         self.zones: List[RestrictedZone] = list(zones or [])
@@ -96,6 +97,7 @@ class GeofenceManager:
             raise ValueError("GeofenceManager requires at least one polygon")
         self.alerted_ids: Dict[Tuple[int, str], float] = {}
         self.last_alerts: List[IntrusionAlert] = []
+        self.logger = logger
 
     @classmethod
     def from_zone_store(
@@ -131,7 +133,7 @@ class GeofenceManager:
             )
         if not packed:
             raise ValueError(f"no usable geofence polygons in {zones_path}")
-        return cls(cooldown_seconds=cooldown_seconds, zones=packed)
+        return cls(cooldown_seconds=cooldown_seconds, zones=packed, logger=None)
 
     def draw_zones(self, frame: np.ndarray, camera_id: Optional[str] = None) -> None:
         for zone in self.zones:
@@ -147,6 +149,7 @@ class GeofenceManager:
         camera_id: str = "",
         timestamp: Optional[float] = None,
         draw: bool = True,
+        source_camera_id: Optional[str] = None,
     ) -> np.ndarray:
         """Overlay footprint and emit a cooldown-limited alert if inside a zone."""
         if timestamp is None:
@@ -174,12 +177,24 @@ class GeofenceManager:
                     timestamp=timestamp,
                 )
                 self.last_alerts.append(alert)
+                outpost = source_camera_id or camera_id or "unknown-cam"
                 LOGGER.warning(
                     "[ALERT] Intrusion Detected! Global ID: %s entered %s on %s",
                     global_id,
                     zone.name,
-                    camera_id or "unknown-cam",
+                    outpost,
                 )
+                if self.logger is not None:
+                    self.logger.log_intrusion(
+                        camera_id=outpost,
+                        global_id=int(global_id),
+                        frame=frame,
+                        bbox=alert.bbox,
+                        timestamp=timestamp,
+                        zone_id=zone.zone_id,
+                        zone_name=zone.name,
+                        footprint=foot,
+                    )
                 if draw:
                     cv2.putText(
                         frame,

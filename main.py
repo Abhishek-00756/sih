@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from alert_logger import AlertLogger
 from extractor import PersonFeatureExtractor
 from gallery_manager import GlobalGalleryManager
 from geofence_manager import GeofenceManager
@@ -116,22 +117,31 @@ def _open_captures(camera_sources: SourceMap) -> Dict[str, ThreadedCamera]:
     return caps
 
 
-def _overlay_geofence(cfg: dict, zones_path: Optional[Path], cooldown: float) -> Optional[GeofenceManager]:
+def _overlay_geofence(
+    cfg: dict,
+    zones_path: Optional[Path],
+    cooldown: float,
+    logger: Optional[AlertLogger] = None,
+) -> Optional[GeofenceManager]:
     inline = cfg.get("restricted_zone")
     if inline:
-        return GeofenceManager(zone_points=inline, cooldown_seconds=cooldown)
+        return GeofenceManager(zone_points=inline, cooldown_seconds=cooldown, logger=logger)
     if zones_path is None or not zones_path.exists():
         return GeofenceManager(
             zone_points=[(100, 400), (500, 400), (600, 600), (50, 600)],
             cooldown_seconds=cooldown,
+            logger=logger,
         )
     try:
-        return GeofenceManager.from_zone_store(zones_path, cooldown_seconds=cooldown, restricted_only=True)
+        mgr = GeofenceManager.from_zone_store(zones_path, cooldown_seconds=cooldown, restricted_only=True)
+        mgr.logger = logger
+        return mgr
     except ValueError:
         LOGGER.warning("No restricted polygons in %s; using demo zone", zones_path)
         return GeofenceManager(
             zone_points=[(100, 400), (500, 400), (600, 600), (50, 600)],
             cooldown_seconds=cooldown,
+            logger=logger,
         )
 
 
@@ -165,6 +175,8 @@ def run_multi_camera_tracking(
     overlay_geofence: Optional[GeofenceManager] = None,
     geofence_cfg: Optional[dict] = None,
     cooldown_seconds: float = 60.0,
+    alert_db: Optional[Path] = None,
+    snapshot_dir: Optional[Path] = None,
 ) -> Dict[str, object]:
     from ultralytics import YOLO
 
@@ -179,10 +191,21 @@ def run_multi_camera_tracking(
         gallery.set_topology(topology)
 
     zone_store, geo_engine, geo_iface = (None, None, None)
+    alert_logger: Optional[AlertLogger] = None
     if enable_geofence:
         zone_store, geo_engine, geo_iface = _maybe_geofence(geofence_zones)
+        db_path = alert_db or ROOT / "border_alerts.db"
+        snap_path = snapshot_dir or ROOT / "alert_snapshots"
+        alert_logger = AlertLogger(db_path=db_path, snapshot_dir=snap_path)
         if overlay_geofence is None:
-            overlay_geofence = _overlay_geofence(geofence_cfg or {}, geofence_zones, cooldown_seconds)
+            overlay_geofence = _overlay_geofence(
+                geofence_cfg or {},
+                geofence_zones,
+                cooldown_seconds,
+                logger=alert_logger,
+            )
+        elif overlay_geofence.logger is None:
+            overlay_geofence.logger = alert_logger
 
     caps = _open_captures(camera_sources)
     writers: Dict[str, cv2.VideoWriter] = {}
@@ -258,6 +281,7 @@ def run_multi_camera_tracking(
                                 result.global_id,
                                 camera_id=geo_cam,
                                 timestamp=current_timestamp,
+                                source_camera_id=cam_id,
                             )
                         geo_records.append(
                             {
@@ -344,6 +368,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--fallback-extractor", action="store_true")
     parser.add_argument("--enable-geofence", action="store_true")
     parser.add_argument("--cooldown", type=float, default=None)
+    parser.add_argument("--alert-db", default="")
+    parser.add_argument("--snapshot-dir", default="")
     parser.add_argument("--output-dir", default="")
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args(argv)
@@ -383,6 +409,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         output_dir=Path(args.output_dir) if args.output_dir else None,
         geofence_cfg=cfg,
         cooldown_seconds=float(args.cooldown or cfg.get("geofence_cooldown", 60.0)),
+        alert_db=Path(args.alert_db) if args.alert_db else Path(cfg.get("alert_db", ROOT / "border_alerts.db")),
+        snapshot_dir=Path(args.snapshot_dir) if args.snapshot_dir else Path(cfg.get("snapshot_dir", ROOT / "alert_snapshots")),
     )
     return 0
 

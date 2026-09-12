@@ -164,6 +164,10 @@ videos/*.mp4
 videos/*.avi
 !videos/.gitkeep
 
+# C2 evidence (generated at runtime)
+*.db
+alert_snapshots/
+
 # Compressed files
 *.zip
 *.rar

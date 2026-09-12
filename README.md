@@ -11,6 +11,7 @@ IP camera / RTSP
   -> Spatio-temporal gallery        gallery_manager.py
   -> Persistent Global ID
   -> Footprint geofence overlay     geofence_manager.py
+  -> SQLite evidence + snapshots    alert_logger.py
   -> Optional confirmed events      geofence/
 ```
 
@@ -32,7 +33,7 @@ Place feeds at `videos/camera1.mp4` and `videos/camera2.mp4`, or pass sources on
 python3 main.py --headless --source Cam_1_Outpost=videos/camera1.mp4 --source Cam_2_Gate=videos/camera2.mp4
 ```
 
-Live RTSP stays real-time: `ThreadedCamera` always exposes the newest decoded frame and drops OpenCV's internal backlog. Footprint intrusion uses the bbox bottom-center and rate-limits alerts per Global ID (`geofence_cooldown`).
+Live RTSP stays real-time: `ThreadedCamera` always exposes the newest decoded frame and drops OpenCV's internal backlog. Footprint intrusion uses the bbox bottom-center and rate-limits alerts per Global ID (`geofence_cooldown`). Each alert writes a timestamped full-frame + crop to `alert_snapshots/` and a row in `border_alerts.db`.
 
 Enable geofence events on Global IDs:
 
@@ -44,6 +45,12 @@ RTSP example:
 
 ```bash
 python3 main.py --display --enable-geofence --source Sector_Alpha=rtsp://admin:pass@10.0.0.8/stream1
+```
+
+Query recent incidents:
+
+```bash
+sqlite3 border_alerts.db "SELECT id, timestamp, camera_id, global_id, snapshot_path FROM security_alerts ORDER BY id DESC LIMIT 10;"
 ```
 
 Gallery-only tests (no GPU, no OSNet weights):
