@@ -18,6 +18,11 @@ display: false
 geofence_zones: configs/zones.json
 enable_geofence: true
 geofence_cooldown: 60
+tripwires:
+  - id: border
+    camera_id: cam_01
+    pt1: [100, 500]
+    pt2: [800, 500]
 alert_db: border_alerts.db
 snapshot_dir: alert_snapshots
 geofence_camera_map:

@@ -34,7 +34,7 @@ from anpr_manager import ANPRManager
 from extractor import PersonFeatureExtractor
 from face_manager import FaceManager
 from gallery_manager import GlobalGalleryManager
-from geofence_manager import GeofenceManager
+from geofence_manager import GeofenceManager, VirtualTripwire
 from video_stream import ThreadedCamera
 
 LOGGER = logging.getLogger("perception")
@@ -125,30 +125,61 @@ def _open_captures(camera_sources: SourceMap) -> Dict[str, ThreadedCamera]:
     return caps
 
 
+def _tripwires_from_config(cfg: dict, cooldown: float) -> List[VirtualTripwire]:
+    raw = cfg.get("tripwires") or []
+    wires: List[VirtualTripwire] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        pt1 = item.get("pt1") or item.get("line_pt1")
+        pt2 = item.get("pt2") or item.get("line_pt2")
+        if not pt1 or not pt2:
+            continue
+        wires.append(
+            VirtualTripwire(
+                pt1,
+                pt2,
+                wire_id=str(item.get("id") or item.get("wire_id") or "border"),
+                camera_id=item.get("camera_id"),
+                cooldown_seconds=float(item.get("cooldown_seconds", cooldown)),
+            )
+        )
+    return wires
+
+
 def _overlay_geofence(
     cfg: dict,
     zones_path: Optional[Path],
     cooldown: float,
     logger: Optional[AlertLogger] = None,
 ) -> Optional[GeofenceManager]:
+    wires = _tripwires_from_config(cfg, cooldown)
     inline = cfg.get("restricted_zone")
     if inline:
-        return GeofenceManager(zone_points=inline, cooldown_seconds=cooldown, logger=logger)
+        return GeofenceManager(
+            zone_points=inline,
+            cooldown_seconds=cooldown,
+            tripwires=wires,
+            logger=logger,
+        )
     if zones_path is None or not zones_path.exists():
         return GeofenceManager(
             zone_points=[(100, 400), (500, 400), (600, 600), (50, 600)],
             cooldown_seconds=cooldown,
+            tripwires=wires,
             logger=logger,
         )
     try:
         mgr = GeofenceManager.from_zone_store(zones_path, cooldown_seconds=cooldown, restricted_only=True)
         mgr.logger = logger
+        mgr.tripwires = wires
         return mgr
     except ValueError:
         LOGGER.warning("No restricted polygons in %s; using demo zone", zones_path)
         return GeofenceManager(
             zone_points=[(100, 400), (500, 400), (600, 600), (50, 600)],
             cooldown_seconds=cooldown,
+            tripwires=wires,
             logger=logger,
         )
 
@@ -322,6 +353,14 @@ def run_multi_camera_tracking(
                                     faces_captured += 1
                             if overlay_geofence is not None:
                                 overlay_geofence.check_intrusion(
+                                    frame,
+                                    bbox,
+                                    result.global_id,
+                                    camera_id=geo_cam,
+                                    timestamp=current_timestamp,
+                                    source_camera_id=cam_id,
+                                )
+                                overlay_geofence.check_tripwire(
                                     frame,
                                     bbox,
                                     result.global_id,
@@ -510,6 +549,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--max-frames", type=int, default=0)
     parser.add_argument("--fallback-extractor", action="store_true")
     parser.add_argument("--enable-geofence", action="store_true")
+    parser.add_argument("--verify-ledger", action="store_true")
     parser.add_argument("--dwell-threshold", type=float, default=None)
     parser.add_argument("--no-loitering", action="store_true")
     parser.add_argument("--enable-anpr", action="store_true")
@@ -533,6 +573,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     cfg = _load_config(Path(args.config)) if args.config else {}
+    if args.verify_ledger:
+        db = Path(args.alert_db) if args.alert_db else Path(cfg.get("alert_db", ROOT / "border_alerts.db"))
+        snaps = Path(args.snapshot_dir) if args.snapshot_dir else Path(cfg.get("snapshot_dir", ROOT / "alert_snapshots"))
+        result = AlertLogger(db_path=db, snapshot_dir=snaps).verify_ledger()
+        LOGGER.info("%s", result["message"])
+        return 0 if result.get("ok") else 1
     sources = _parse_sources(args.source) if args.source else _sources_from_config(cfg)
     if not sources:
         LOGGER.error("No camera sources configured. Pass --source Cam=path or edit configs/perception.yaml")
