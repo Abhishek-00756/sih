@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Dict, Iterable, Optional, Sequence, Set, Tuple, Union
+from typing import Callable, Dict, Iterable, Optional, Sequence, Set, Tuple, Union
 
 import cv2
 import numpy as np
@@ -19,6 +19,7 @@ LOGGER = logging.getLogger("perception.activity")
 
 EntityId = Union[int, str]
 EntityKey = Tuple[str, str]
+DirectionProvider = Callable[[str, EntityId], Optional[str]]
 
 COCO_CLASSES = {
     0: "Person",
@@ -63,6 +64,7 @@ class ActivityAnalyzer:
         self,
         dwell_threshold: float = 30.0,
         logger: Optional[AlertLogger] = None,
+        direction_provider: Optional[DirectionProvider] = None,
     ) -> None:
         if dwell_threshold <= 0:
             raise ValueError("dwell_threshold must be positive")
@@ -70,9 +72,23 @@ class ActivityAnalyzer:
         self.active_entities: Dict[EntityKey, Dict[str, object]] = {}
         self.last_alerts: list[Dict[str, object]] = []
         self.logger = logger if logger is not None else AlertLogger()
+        self.direction_provider = direction_provider
 
     def _key(self, camera_id: str, entity_id: EntityId) -> EntityKey:
         return (str(camera_id), str(entity_id))
+
+    def dwell_time(
+        self,
+        camera_id: str,
+        entity_id: EntityId,
+        timestamp: Optional[float] = None,
+    ) -> Optional[float]:
+        """Return the current dwell duration for a tracked entity, if known."""
+        record = self.active_entities.get(self._key(camera_id, entity_id))
+        if record is None:
+            return None
+        current_time = time.time() if timestamp is None else float(timestamp)
+        return max(0.0, current_time - float(record["first_seen"]))
 
     def analyze_behavior(
         self,
@@ -129,6 +145,9 @@ class ActivityAnalyzer:
                 }
             )
             if self.logger is not None:
+                direction = None
+                if self.direction_provider is not None:
+                    direction = self.direction_provider(str(camera_id), entity_id)
                 self.logger.log_intrusion(
                     camera_id=camera_id,
                     global_id=numeric_entity_id(entity_id),
@@ -138,6 +157,7 @@ class ActivityAnalyzer:
                     alert_type="Loitering",
                     zone_name=str(entity_type),
                     footprint=_footprint(bbox),
+                    direction=direction,
                     dwell_time=dwell_time,
                 )
         return frame
