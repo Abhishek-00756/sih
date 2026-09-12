@@ -156,6 +156,14 @@
 **/.flutter-plugins
 **/.flutter-plugins-dependencies
 
+# Perception weights and sample video
+*.pt
+*.pth
+*.onnx
+videos/*.mp4
+videos/*.avi
+!videos/.gitkeep
+
 # Compressed files
 *.zip
 *.rar

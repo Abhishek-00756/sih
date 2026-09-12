@@ -1,0 +1,26 @@
+similarity_threshold: 0.75
+max_time_diff: 120.0
+local_track_ttl: 8.0
+detector_weights: yolov8n.pt
+osnet_model: osnet_x1_0
+person_class: 0
+headless: true
+display: false
+geofence_zones: configs/zones.json
+enable_geofence: true
+
+cameras:
+  Cam_1_Outpost:
+    source: videos/camera1.mp4
+    neighbors:
+      Cam_2_Gate:
+        min_transit_sec: 2.0
+        max_transit_sec: 120.0
+        overlapping: false
+  Cam_2_Gate:
+    source: videos/camera2.mp4
+    neighbors:
+      Cam_1_Outpost:
+        min_transit_sec: 2.0
+        max_transit_sec: 120.0
+        overlapping: false
