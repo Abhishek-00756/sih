@@ -47,6 +47,10 @@ def test_log_intrusion_writes_snapshot_and_row(tmp_path: Path):
     assert json.loads(row["footprint"]) == [50, 80]
     assert Path(row["snapshot_path"]).exists()
     assert row["crop_path"] and Path(row["crop_path"]).exists()
+    assert row["incident_dir"] and Path(row["incident_dir"]).is_dir()
+    assert (Path(row["incident_dir"]) / "meta.json").exists()
+    assert logger.search(camera_id="Cam_1_Outpost", global_id=17)
+    assert logger.stats()["total"] == 1
 
 
 def test_geofence_hooks_logger_once(tmp_path: Path):
@@ -67,5 +71,5 @@ def test_schema_has_audit_columns(tmp_path: Path):
     AlertLogger(db_path=db, snapshot_dir=tmp_path / "s")
     with sqlite3.connect(str(db)) as conn:
         cols = {row[1] for row in conn.execute("PRAGMA table_info(security_alerts)")}
-    for name in ("timestamp", "camera_id", "global_id", "bbox", "snapshot_path", "footprint"):
+    for name in ("timestamp", "camera_id", "global_id", "bbox", "snapshot_path", "footprint", "incident_dir"):
         assert name in cols
