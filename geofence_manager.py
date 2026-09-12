@@ -223,9 +223,6 @@ class GeofenceManager:
         self.logger = logger
         self.dwell_provider = dwell_provider
         if self.logger is not None:
-            # ActivityAnalyzer registers its live dwell provider on this logger.
-            # Expose our direction lookup too so loitering alerts can include a
-            # preceding inbound/outbound crossing in the same risk calculation.
             try:
                 setattr(self.logger, "_direction_provider", self.last_direction_for)
             except Exception:
@@ -278,7 +275,6 @@ class GeofenceManager:
             wire.draw(frame)
 
     def last_direction_for(self, camera_id: str, global_id: int) -> Optional[str]:
-        """Return the most recent classified tripwire direction for an entity."""
         key = (str(camera_id), int(global_id))
         directions = [wire.last_direction.get(key) for wire in self.tripwires]
         valid = [d for d in directions if d in {"INBOUND", "OUTBOUND"}]
@@ -386,6 +382,12 @@ class GeofenceManager:
             )
             if not crossed:
                 continue
+            # main.py uses a source-camera ID (for tracking) and a mapped geofence
+            # camera ID (for zones). Preserve direction under both keys so the
+            # later loitering alert can reuse the same crossing context.
+            if source_camera_id and str(source_camera_id) != str(camera_id):
+                wire.last_direction[(str(source_camera_id), int(global_id))] = direction
+
             alert = TripwireAlert(
                 global_id=int(global_id),
                 camera_id=str(camera_id),
