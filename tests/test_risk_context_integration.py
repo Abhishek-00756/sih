@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +14,7 @@ if str(ROOT) not in sys.path:
 
 from activity_analyzer import ActivityAnalyzer
 from geofence_manager import GeofenceManager, VirtualTripwire
+from risk_scorer import RiskScorer
 
 
 class CaptureLogger:
@@ -99,3 +101,17 @@ def test_loitering_alert_reuses_previous_tripwire_direction():
     call = loiter_calls[0]
     assert call["direction"] == "INBOUND"
     assert call["dwell_time"] == 61.0
+
+
+def test_combined_inbound_night_loiter_reaches_critical_score():
+    scorer = RiskScorer(timezone_name="Asia/Kolkata")
+    night_ist = datetime(2026, 9, 12, 22, 0, tzinfo=__import__("zoneinfo").ZoneInfo("Asia/Kolkata"))
+    score, reasons = scorer.score(
+        event_type="Tripwire INBOUND",
+        direction="INBOUND",
+        timestamp=night_ist.timestamp(),
+        dwell_time=61.0,
+    )
+    assert score == 100
+    assert reasons == ["base", "inbound_tripwire", "night", "loitering"]
+    assert scorer.label(score) == "CRITICAL"
