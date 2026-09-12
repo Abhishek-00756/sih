@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import cv2
 import numpy as np
@@ -19,6 +19,7 @@ LOGGER = logging.getLogger("perception.geofence")
 
 Point = Tuple[float, float]
 BBox = Tuple[int, int, int, int]
+DwellProvider = Callable[[str, int, float], Optional[float]]
 
 
 @dataclass(frozen=True)
@@ -63,7 +64,7 @@ def _as_point(pt: Sequence[float]) -> Tuple[int, int]:
 
 
 class VirtualTripwire:
-    """Line-crossing detector: movement segment vs a border fence line."""
+    """Line-crossing detector with A->B / B->A direction classification."""
 
     def __init__(
         self,
@@ -208,6 +209,7 @@ class GeofenceManager:
         zones: Optional[Iterable[RestrictedZone]] = None,
         tripwires: Optional[Iterable[VirtualTripwire]] = None,
         logger: Optional[object] = None,
+        dwell_provider: Optional[DwellProvider] = None,
     ) -> None:
         self.cooldown_seconds = float(cooldown_seconds)
         self.zones: List[RestrictedZone] = list(zones or [])
@@ -219,6 +221,7 @@ class GeofenceManager:
         self.alerted_ids: Dict[Tuple[int, str], float] = {}
         self.last_alerts: List[Union[IntrusionAlert, TripwireAlert]] = []
         self.logger = logger
+        self.dwell_provider = dwell_provider
 
     @classmethod
     def from_zone_store(
@@ -265,6 +268,13 @@ class GeofenceManager:
             if camera_id is not None and not wire.applies_to(camera_id):
                 continue
             wire.draw(frame)
+
+    def last_direction_for(self, camera_id: str, global_id: int) -> Optional[str]:
+        """Return the most recent classified tripwire direction for an entity."""
+        key = (str(camera_id), int(global_id))
+        directions = [wire.last_direction.get(key) for wire in self.tripwires]
+        valid = [d for d in directions if d in {"INBOUND", "OUTBOUND"}]
+        return valid[-1] if valid else None
 
     def check_intrusion(
         self,
@@ -388,6 +398,13 @@ class GeofenceManager:
                 outpost,
             )
             if self.logger is not None:
+                dwell_time = None
+                if self.dwell_provider is not None:
+                    dwell_time = self.dwell_provider(
+                        str(source_camera_id or camera_id),
+                        int(global_id),
+                        float(timestamp),
+                    )
                 self.logger.log_intrusion(
                     camera_id=outpost,
                     global_id=int(global_id),
@@ -399,6 +416,7 @@ class GeofenceManager:
                     zone_name=f"Tripwire {wire.wire_id} {direction}",
                     footprint=foot,
                     direction=direction,
+                    dwell_time=dwell_time,
                 )
         return frame
 
