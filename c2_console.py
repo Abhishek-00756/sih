@@ -67,6 +67,8 @@ INDEX_HTML = """<!DOCTYPE html>
         <option>GEOFENCE_ENTER</option>
         <option>Loitering</option>
         <option>Tripwire Breach</option>
+        <option>Tripwire INBOUND</option>
+        <option>Tripwire OUTBOUND</option>
       </select>
       <button id="search">Search evidence</button>
       <div class="list" id="list"></div>
@@ -89,7 +91,7 @@ INDEX_HTML = """<!DOCTYPE html>
         <div class="card" data-id="${r.id}">
           <div class="gid">GID ${r.global_id}</div>
           <div>${r.camera_id}</div>
-          <div style="color:#93a0b8;font-size:12px">${r.timestamp} · ${r.alert_type}</div>
+          <div style="color:#93a0b8;font-size:12px">${r.timestamp} · ${r.alert_type}${r.risk_score != null ? ' · RISK ' + r.risk_score : ''}</div>
         </div>`).join('') || '<div class="empty">No matching incidents.</div>';
       document.querySelectorAll('.card').forEach(el => el.onclick = () => openAlert(el.dataset.id, el));
       if (rows[0]) openAlert(rows[0].id, document.querySelector('.card'));
@@ -106,6 +108,8 @@ INDEX_HTML = """<!DOCTYPE html>
           <div><b>Camera / Outpost</b>${r.camera_id}</div>
           <div><b>Timestamp</b>${r.timestamp}</div>
           <div><b>Alert</b>${r.alert_type}</div>
+          <div><b>Risk</b>${r.risk_score != null ? r.risk_score + ' ' + (r.risk_label || '') : '-'}</div>
+          <div><b>Direction</b>${r.direction || '-'}</div>
           <div><b>Zone</b>${r.zone_name || r.zone_id || '-'}</div>
           <div><b>Coordinates</b>${r.footprint || r.bbox}</div>
         </div>

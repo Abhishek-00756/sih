@@ -13,6 +13,8 @@ anpr_min_width: 150
 anpr_min_height: 150
 enable_face_capture: true
 face_save_dir: face_database
+enable_enhance: true
+enhance_mode: auto
 headless: true
 display: false
 geofence_zones: configs/zones.json
@@ -23,6 +25,7 @@ tripwires:
     camera_id: cam_01
     pt1: [100, 500]
     pt2: [800, 500]
+    inbound_positive: true
 alert_db: border_alerts.db
 snapshot_dir: alert_snapshots
 geofence_camera_map:

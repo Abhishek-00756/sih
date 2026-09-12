@@ -42,6 +42,7 @@ class TripwireAlert:
     previous: Point
     bbox: BBox
     timestamp: float
+    direction: str = "UNKNOWN"
     alert_type: str = "Tripwire Breach"
 
 
@@ -71,6 +72,7 @@ class VirtualTripwire:
         wire_id: str = "border",
         camera_id: Optional[str] = None,
         cooldown_seconds: float = 60.0,
+        inbound_positive: bool = True,
     ) -> None:
         self.A = _as_point(line_pt1)
         self.B = _as_point(line_pt2)
@@ -79,8 +81,10 @@ class VirtualTripwire:
         self.wire_id = str(wire_id)
         self.camera_id = None if camera_id is None else str(camera_id)
         self.cooldown_seconds = float(cooldown_seconds)
+        self.inbound_positive = bool(inbound_positive)
         self.previous_positions: Dict[Tuple[str, int], Point] = {}
         self.last_alert_at: Dict[Tuple[str, int], float] = {}
+        self.last_direction: Dict[Tuple[str, int], str] = {}
 
     def applies_to(self, camera_id: str) -> bool:
         return self.camera_id is None or self.camera_id == str(camera_id)
@@ -91,6 +95,19 @@ class VirtualTripwire:
 
     def _intersect(self, a: Point, b: Point, c: Point, d: Point) -> bool:
         return self._ccw(a, c, d) != self._ccw(b, c, d) and self._ccw(a, b, c) != self._ccw(a, b, d)
+
+    @staticmethod
+    def _get_side(a: Point, b: Point, point: Point) -> float:
+        return (b[0] - a[0]) * (point[1] - a[1]) - (b[1] - a[1]) * (point[0] - a[0])
+
+    def crossing_direction(self, previous: Point, current: Point) -> str:
+        prev_side = self._get_side(self.A, self.B, previous)
+        curr_side = self._get_side(self.A, self.B, current)
+        if prev_side == 0 or curr_side == 0 or (prev_side > 0) == (curr_side > 0):
+            return "UNKNOWN"
+        moved_positive = prev_side < 0 and curr_side > 0
+        inbound = moved_positive if self.inbound_positive else not moved_positive
+        return "INBOUND" if inbound else "OUTBOUND"
 
     def draw(self, frame: np.ndarray, color: Tuple[int, int, int] = (0, 255, 255), thickness: int = 2) -> None:
         cv2.line(frame, self.A, self.B, color, thickness)
@@ -112,34 +129,38 @@ class VirtualTripwire:
         camera_id: str = "",
         timestamp: Optional[float] = None,
         draw: bool = True,
-    ) -> Tuple[np.ndarray, bool]:
+    ) -> Tuple[np.ndarray, bool, str]:
         if timestamp is None:
             timestamp = time.time()
         if camera_id and not self.applies_to(camera_id):
-            return frame, False
+            return frame, False, "UNKNOWN"
 
         current = _as_point(current_footprint)
         key = (str(camera_id), int(global_id))
         crossed = False
+        direction = "UNKNOWN"
         prev = self.previous_positions.get(key)
         if prev is not None and prev != current and self._intersect(self.A, self.B, prev, current):
             last = self.last_alert_at.get(key)
             if last is None or timestamp - last > self.cooldown_seconds:
                 crossed = True
+                direction = self.crossing_direction(prev, current)
                 self.last_alert_at[key] = timestamp
+                self.last_direction[key] = direction
                 if draw:
-                    cv2.line(frame, self.A, self.B, (0, 0, 255), 4)
+                    color = (0, 0, 255) if direction == "INBOUND" else (0, 165, 255)
+                    cv2.line(frame, self.A, self.B, color, 4)
                     cv2.putText(
                         frame,
-                        f"TRIPWIRE BREACH: {global_id}",
+                        f"BREACH ({direction}): {global_id}",
                         (50, 80),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         1.0,
-                        (0, 0, 255),
+                        color,
                         3,
                     )
         self.previous_positions[key] = current
-        return frame, crossed
+        return frame, crossed, direction
 
 
 class RestrictedZone:
@@ -337,7 +358,7 @@ class GeofenceManager:
         foot = footprint_from_bbox(bbox)
         for wire in self.tripwires:
             prev = wire.previous_positions.get((str(camera_id), int(global_id)), foot)
-            frame, crossed = wire.check_crossing(
+            frame, crossed, direction = wire.check_crossing(
                 frame,
                 foot,
                 global_id,
@@ -355,11 +376,13 @@ class GeofenceManager:
                 previous=prev,
                 bbox=(int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])),
                 timestamp=timestamp,
+                direction=direction,
             )
             self.last_alerts.append(alert)
             outpost = source_camera_id or camera_id or "unknown-cam"
             LOGGER.warning(
-                "[ALERT] Tripwire breach! Global ID: %s crossed %s on %s",
+                "[ALERT] Tripwire %s! Global ID: %s crossed %s on %s",
+                direction,
                 global_id,
                 wire.wire_id,
                 outpost,
@@ -371,10 +394,11 @@ class GeofenceManager:
                     frame=frame,
                     bbox=alert.bbox,
                     timestamp=timestamp,
-                    alert_type="Tripwire Breach",
+                    alert_type=f"Tripwire {direction}",
                     zone_id=wire.wire_id,
-                    zone_name=f"Tripwire {wire.wire_id}",
+                    zone_name=f"Tripwire {wire.wire_id} {direction}",
                     footprint=foot,
+                    direction=direction,
                 )
         return frame
 

@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
+from risk_scorer import RiskScorer
+
 import cv2
 import numpy as np
 
@@ -50,6 +52,7 @@ class AlertLogger:
         if self.db_path.parent != Path("."):
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
+        self.scorer = RiskScorer()
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
@@ -81,9 +84,17 @@ class AlertLogger:
             cols = {row[1] for row in conn.execute("PRAGMA table_info(security_alerts)")}
             if "incident_dir" not in cols:
                 conn.execute("ALTER TABLE security_alerts ADD COLUMN incident_dir TEXT")
-            for col in ("image_hash", "previous_hash", "block_hash"):
+            for col, decl in (
+                ("image_hash", "TEXT"),
+                ("previous_hash", "TEXT"),
+                ("block_hash", "TEXT"),
+                ("direction", "TEXT"),
+                ("risk_score", "INTEGER"),
+                ("risk_label", "TEXT"),
+                ("risk_factors", "TEXT"),
+            ):
                 if col not in cols:
-                    conn.execute(f"ALTER TABLE security_alerts ADD COLUMN {col} TEXT")
+                    conn.execute(f"ALTER TABLE security_alerts ADD COLUMN {col} {decl}")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_alerts_camera ON security_alerts(camera_id)"
             )
@@ -131,13 +142,24 @@ class AlertLogger:
                 )
             conn.commit()
 
-    def _annotate(self, frame: np.ndarray, bbox: BBox, global_id: int, camera_id: str) -> np.ndarray:
+    def _annotate(
+        self,
+        frame: np.ndarray,
+        bbox: BBox,
+        global_id: int,
+        camera_id: str,
+        risk_score: Optional[int] = None,
+        risk_label: Optional[str] = None,
+    ) -> np.ndarray:
         evidence = frame.copy()
         x1, y1, x2, y2 = bbox
         cv2.rectangle(evidence, (x1, y1), (x2, y2), (0, 0, 255), 3)
+        title = f"INTRUSION ALERT - GID: {global_id} CAM: {camera_id}"
+        if risk_score is not None:
+            title = f"{title} RISK {risk_score} {risk_label or ''}".strip()
         cv2.putText(
             evidence,
-            f"INTRUSION ALERT - GID: {global_id} CAM: {camera_id}",
+            title,
             (x1, max(25, y1 - 10)),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.7,
@@ -207,6 +229,8 @@ class AlertLogger:
         zone_id: str = "",
         zone_name: str = "",
         footprint: Optional[Sequence[float]] = None,
+        direction: Optional[str] = None,
+        dwell_time: Optional[float] = None,
     ) -> str:
         """Save visual evidence into an incident folder and insert a searchable row."""
         now = _utc_now(timestamp)
@@ -217,7 +241,21 @@ class AlertLogger:
         filepath = incident_dir / "full.jpg"
         crop_path: Optional[Path] = None
 
-        evidence = self._annotate(frame, box, gid, str(camera_id))
+        risk_score, risk_factors = self.scorer.score(
+            event_type=alert_type,
+            direction=direction,
+            timestamp=float(now.timestamp()),
+            dwell_time=dwell_time,
+        )
+        risk_label = self.scorer.label(risk_score)
+        evidence = self._annotate(
+            frame,
+            box,
+            gid,
+            str(camera_id),
+            risk_score=risk_score,
+            risk_label=risk_label,
+        )
         if not cv2.imwrite(str(filepath), evidence):
             raise RuntimeError(f"failed to write evidence snapshot {filepath}")
 
@@ -252,6 +290,10 @@ class AlertLogger:
                 "image_hash": img_hash,
                 "previous_hash": prev_hash,
                 "block_hash": chain_hash,
+                "direction": direction,
+                "risk_score": risk_score,
+                "risk_label": risk_label,
+                "risk_factors": risk_factors,
             }
             (incident_dir / "meta.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
             conn.execute(
@@ -259,9 +301,9 @@ class AlertLogger:
                 INSERT INTO security_alerts (
                     timestamp, unix_time, camera_id, global_id, alert_type,
                     zone_id, zone_name, bbox, footprint, snapshot_path, crop_path, incident_dir,
-                    image_hash, previous_hash, block_hash
+                    image_hash, previous_hash, block_hash, direction, risk_score, risk_label, risk_factors
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     timestamp_str,
@@ -279,6 +321,10 @@ class AlertLogger:
                     img_hash,
                     prev_hash,
                     chain_hash,
+                    direction,
+                    risk_score,
+                    risk_label,
+                    json.dumps(risk_factors),
                 ),
             )
             conn.execute(
