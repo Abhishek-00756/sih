@@ -66,6 +66,7 @@ INDEX_HTML = """<!DOCTYPE html>
         <option>Geofence Intrusion</option>
         <option>GEOFENCE_ENTER</option>
         <option>Loitering</option>
+        <option>Tripwire Breach</option>
       </select>
       <button id="search">Search evidence</button>
       <div class="list" id="list"></div>

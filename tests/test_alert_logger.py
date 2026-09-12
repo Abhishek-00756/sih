@@ -71,5 +71,46 @@ def test_schema_has_audit_columns(tmp_path: Path):
     AlertLogger(db_path=db, snapshot_dir=tmp_path / "s")
     with sqlite3.connect(str(db)) as conn:
         cols = {row[1] for row in conn.execute("PRAGMA table_info(security_alerts)")}
-    for name in ("timestamp", "camera_id", "global_id", "bbox", "snapshot_path", "footprint", "incident_dir"):
+    for name in (
+        "timestamp",
+        "camera_id",
+        "global_id",
+        "bbox",
+        "snapshot_path",
+        "footprint",
+        "incident_dir",
+        "image_hash",
+        "previous_hash",
+        "block_hash",
+    ):
         assert name in cols
+
+
+def test_ledger_chains_events_and_detects_image_tamper(tmp_path: Path):
+    logger = AlertLogger(db_path=tmp_path / "l.db", snapshot_dir=tmp_path / "s")
+    frame = np.zeros((80, 80, 3), dtype=np.uint8)
+    logger.log_intrusion("Cam_1", 1, frame, (10, 10, 40, 40), timestamp=1.0)
+    logger.log_intrusion("Cam_1", 2, frame, (10, 10, 40, 40), timestamp=2.0)
+    result = logger.verify_ledger()
+    assert result["ok"] is True
+    assert result["blocks"] == 3
+
+    rows = logger.recent()
+    snap = Path(rows[0]["snapshot_path"])
+    snap.write_bytes(snap.read_bytes() + b"tamper")
+    broken = logger.verify_ledger()
+    assert broken["ok"] is False
+    assert "modified" in broken["message"]
+
+
+def test_ledger_detects_row_tamper(tmp_path: Path):
+    db = tmp_path / "t.db"
+    logger = AlertLogger(db_path=db, snapshot_dir=tmp_path / "s")
+    frame = np.zeros((60, 60, 3), dtype=np.uint8)
+    logger.log_intrusion("Cam_2", 9, frame, (5, 5, 20, 20), timestamp=3.0)
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute("UPDATE security_ledger SET camera_id = 'HACKED' WHERE id = 2")
+        conn.commit()
+    broken = logger.verify_ledger()
+    assert broken["ok"] is False
+    assert "altered" in broken["message"]
