@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from gallery_manager import GlobalGalleryManager, TransitConstraint
+from gallery_manager import GlobalGalleryManager
 
 
 def _emb(seed: int, dim: int = 512) -> np.ndarray:

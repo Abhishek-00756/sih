@@ -25,6 +25,8 @@ if str(ROOT) not in sys.path:
 
 from extractor import PersonFeatureExtractor
 from gallery_manager import GlobalGalleryManager
+from geofence_manager import GeofenceManager
+from video_stream import ThreadedCamera
 
 LOGGER = logging.getLogger("perception")
 
@@ -98,15 +100,39 @@ def _color_for_id(gid: int) -> Tuple[int, int, int]:
     return tuple(int(x) for x in rng.integers(40, 255, size=3))
 
 
-def _open_captures(camera_sources: SourceMap) -> Dict[str, cv2.VideoCapture]:
-    caps: Dict[str, cv2.VideoCapture] = {}
+def _open_captures(camera_sources: SourceMap) -> Dict[str, ThreadedCamera]:
+    caps: Dict[str, ThreadedCamera] = {}
     for cam_id, src in camera_sources.items():
-        cap = cv2.VideoCapture(src)
-        if not cap.isOpened():
+        cap = ThreadedCamera(src, name=str(cam_id), buffer_size=1)
+        deadline = time.time() + 5.0
+        opened = cap.isOpened()
+        while not opened and time.time() < deadline:
+            time.sleep(0.05)
+            opened = cap.isOpened()
+        if not opened:
+            cap.release()
             raise RuntimeError(f"failed to open camera {cam_id}: {src}")
         caps[str(cam_id)] = cap
-        LOGGER.info("Opened %s <- %s", cam_id, src)
     return caps
+
+
+def _overlay_geofence(cfg: dict, zones_path: Optional[Path], cooldown: float) -> Optional[GeofenceManager]:
+    inline = cfg.get("restricted_zone")
+    if inline:
+        return GeofenceManager(zone_points=inline, cooldown_seconds=cooldown)
+    if zones_path is None or not zones_path.exists():
+        return GeofenceManager(
+            zone_points=[(100, 400), (500, 400), (600, 600), (50, 600)],
+            cooldown_seconds=cooldown,
+        )
+    try:
+        return GeofenceManager.from_zone_store(zones_path, cooldown_seconds=cooldown, restricted_only=True)
+    except ValueError:
+        LOGGER.warning("No restricted polygons in %s; using demo zone", zones_path)
+        return GeofenceManager(
+            zone_points=[(100, 400), (500, 400), (600, 600), (50, 600)],
+            cooldown_seconds=cooldown,
+        )
 
 
 def _maybe_geofence(zones_path: Optional[Path]):
@@ -136,6 +162,9 @@ def run_multi_camera_tracking(
     enable_geofence: bool = False,
     use_fallback_extractor: bool = False,
     output_dir: Optional[Path] = None,
+    overlay_geofence: Optional[GeofenceManager] = None,
+    geofence_cfg: Optional[dict] = None,
+    cooldown_seconds: float = 60.0,
 ) -> Dict[str, object]:
     from ultralytics import YOLO
 
@@ -152,6 +181,8 @@ def run_multi_camera_tracking(
     zone_store, geo_engine, geo_iface = (None, None, None)
     if enable_geofence:
         zone_store, geo_engine, geo_iface = _maybe_geofence(geofence_zones)
+        if overlay_geofence is None:
+            overlay_geofence = _overlay_geofence(geofence_cfg or {}, geofence_zones, cooldown_seconds)
 
     caps = _open_captures(camera_sources)
     writers: Dict[str, cv2.VideoWriter] = {}
@@ -169,9 +200,12 @@ def run_multi_camera_tracking(
             current_timestamp = time.time()
             for cam_id, cap in caps.items():
                 ret, frame = cap.read()
-                if not ret:
+                if not ret or frame is None:
                     continue
                 any_ok = True
+                geo_cam = (geofence_cfg or {}).get("geofence_camera_map", {}).get(cam_id, cam_id)
+                if overlay_geofence is not None:
+                    overlay_geofence.draw_zones(frame, camera_id=geo_cam)
 
                 results = detectors[cam_id].track(
                     frame,
@@ -217,6 +251,14 @@ def run_multi_camera_tracking(
                             color,
                             2,
                         )
+                        if overlay_geofence is not None:
+                            overlay_geofence.check_intrusion(
+                                frame,
+                                (x1, y1, x2, y2),
+                                result.global_id,
+                                camera_id=geo_cam,
+                                timestamp=current_timestamp,
+                            )
                         geo_records.append(
                             {
                                 "camera_id": cam_id,
@@ -238,6 +280,8 @@ def run_multi_camera_tracking(
                     events_emitted += len(events)
                     for ev in events:
                         LOGGER.info("GEOFENCE %s", json.dumps(ev.to_dict()))
+                if overlay_geofence is not None:
+                    events_emitted += len(overlay_geofence.pop_alerts())
 
                 if display and not headless:
                     cv2.imshow(f"Feed: {cam_id}", frame)
@@ -299,6 +343,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--max-frames", type=int, default=0)
     parser.add_argument("--fallback-extractor", action="store_true")
     parser.add_argument("--enable-geofence", action="store_true")
+    parser.add_argument("--cooldown", type=float, default=None)
     parser.add_argument("--output-dir", default="")
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args(argv)
@@ -336,6 +381,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         enable_geofence=bool(args.enable_geofence or cfg.get("enable_geofence", False)),
         use_fallback_extractor=args.fallback_extractor,
         output_dir=Path(args.output_dir) if args.output_dir else None,
+        geofence_cfg=cfg,
+        cooldown_seconds=float(args.cooldown or cfg.get("geofence_cooldown", 60.0)),
     )
     return 0
 
