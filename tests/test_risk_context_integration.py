@@ -33,8 +33,8 @@ def test_tripwire_alert_receives_current_dwell_time():
     bbox_above = (180, 100, 220, 150)
     bbox_below = (180, 210, 220, 260)
 
-    analyzer.analyze_behavior(frame, bbox_above, 7, camera_id="cam_01", timestamp=100.0, draw=False)
-    analyzer.analyze_behavior(frame, bbox_above, 7, camera_id="cam_01", timestamp=161.0, draw=False)
+    analyzer.analyze_behavior(frame, bbox_above, 7, camera_id="Cam_1_Outpost", timestamp=100.0, draw=False)
+    analyzer.analyze_behavior(frame, bbox_above, 7, camera_id="Cam_1_Outpost", timestamp=161.0, draw=False)
 
     # Mapped geofence camera ID differs from source camera ID, matching main.py.
     mgr.check_tripwire(
@@ -72,7 +72,7 @@ def test_loitering_alert_reuses_previous_tripwire_direction():
     above = (180, 100, 220, 150)
     below = (180, 210, 220, 260)
 
-    analyzer.analyze_behavior(frame, above, 9, camera_id="cam_01", timestamp=100.0, draw=False)
+    analyzer.analyze_behavior(frame, above, 9, camera_id="Cam_1_Outpost", timestamp=100.0, draw=False)
     mgr.check_tripwire(
         frame,
         above,
