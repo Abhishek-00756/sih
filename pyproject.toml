@@ -4,14 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cctv-geofence"
-version = "0.1.0"
-description = "Pixel-space geofencing for YOLOX + ByteTrack CCTV tracks"
+version = "0.2.0"
+description = "Shared perception Re-ID plus pixel-space geofencing for CCTV tracks"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
   "opencv-python>=4.8.0",
   "shapely>=2.0.0",
   "numpy>=1.24.0",
+  "pyyaml>=6.0",
 ]
 
 [tool.setuptools.packages.find]

@@ -1,3 +1,53 @@
+# Shared Perception and Multi-Camera Re-ID
+
+Production starting blueprint for border CCTV: multiple cameras, local person tracks, OSNet body embeddings, and a centralized gallery that assigns a persistent **Global ID**.
+
+```text
+Camera streams
+  -> YOLOv8 person detect
+  -> ByteTrack local IDs
+  -> OSNet 512-d embedding          extractor.py
+  -> Spatio-temporal gallery        gallery_manager.py
+  -> Persistent Global ID
+  -> Optional geofence events       geofence/
+```
+
+## Perception setup
+
+```bash
+python3 -m pip install --break-system-packages -r requirements.txt
+```
+
+If `torchreid` is missing (needed for production OSNet, not for gallery unit tests):
+
+```bash
+python3 -m pip install --break-system-packages git+https://github.com/KaiyangZhou/deep-person-reid.git
+```
+
+Place feeds at `videos/camera1.mp4` and `videos/camera2.mp4`, or pass sources on the CLI. Webcam indices and RTSP URLs also work.
+
+```bash
+python3 main.py --headless --source Cam_1_Outpost=videos/camera1.mp4 --source Cam_2_Gate=videos/camera2.mp4
+```
+
+Enable geofence events on Global IDs:
+
+```bash
+python3 main.py --headless --enable-geofence --config configs/perception.yaml
+```
+
+Gallery-only tests (no GPU, no OSNet weights):
+
+```bash
+python3 -m pytest tests/test_gallery_manager.py tests/test_extractor.py -q
+```
+
+Key knobs live in `configs/perception.yaml`: cosine threshold, max appearance window, camera topology (min/max transit time), and YOLO/OSNet names.
+
+Local ByteTrack IDs stay camera-specific. Only the gallery Global ID is shared across cameras.
+
+---
+
 # CCTV Geofencing Module
 
 Pixel-space geofencing for an AI CCTV border-surveillance prototype. Consumes tracked objects from an existing **YOLOX + ByteTrack** pipeline and emits confirmed `GEOFENCE_ENTER` / `GEOFENCE_EXIT` events.
