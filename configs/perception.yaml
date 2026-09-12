@@ -11,6 +11,8 @@ enable_anpr: true
 anpr_min_confidence: 0.5
 anpr_min_width: 150
 anpr_min_height: 150
+enable_face_capture: true
+face_save_dir: face_database
 headless: true
 display: false
 geofence_zones: configs/zones.json

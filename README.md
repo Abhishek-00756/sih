@@ -13,6 +13,7 @@ IP camera / RTSP
   -> Footprint geofence overlay     geofence_manager.py
   -> Dwell-time loitering           activity_analyzer.py
   -> Vehicle crop OCR (ANPR)        anpr_manager.py
+  -> Haar face mugshot (one/GID)    face_manager.py
   -> SQLite evidence + snapshots    alert_logger.py
   -> Optional confirmed events      geofence/
 ```
@@ -35,7 +36,7 @@ Place feeds at `videos/camera1.mp4` and `videos/camera2.mp4`, or pass sources on
 python3 main.py --headless --source Cam_1_Outpost=videos/camera1.mp4 --source Cam_2_Gate=videos/camera2.mp4
 ```
 
-Live RTSP stays real-time: `ThreadedCamera` always exposes the newest decoded frame and drops OpenCV's internal backlog. YOLOv8 tracks COCO classes `[0, 2, 3, 5, 7]` (person, car, motorcycle, bus, truck). Persons get OSNet Global IDs and geofence checks; vehicles keep ByteTrack IDs (`V-<id>`) and skip Re-ID. Nearby vehicle crops (bbox larger than `anpr_min_width` x `anpr_min_height`, default 150px) are passed to EasyOCR once per track; recognized plates replace the overlay label and are cached in `known_plates`. `ActivityAnalyzer` flags loitering once dwell time exceeds `dwell_threshold` (default 30s). Footprint intrusion uses the bbox bottom-center and rate-limits alerts per Global ID (`geofence_cooldown`). Each alert writes a timestamped full-frame + crop to `alert_snapshots/` and a row in `border_alerts.db`. Pass `--no-anpr` to skip OCR.
+Live RTSP stays real-time: `ThreadedCamera` always exposes the newest decoded frame and drops OpenCV's internal backlog. YOLOv8 tracks COCO classes `[0, 2, 3, 5, 7]` (person, car, motorcycle, bus, truck). Persons get OSNet Global IDs and geofence checks; vehicles keep ByteTrack IDs (`V-<id>`) and skip Re-ID. Nearby vehicle crops (bbox larger than `anpr_min_width` x `anpr_min_height`, default 150px) are passed to EasyOCR once per track; recognized plates replace the overlay label and are cached in `known_plates`. Person body crops are scanned with OpenCV Haar Cascade; the first frontal face per Global ID is saved under `face_database/`. `ActivityAnalyzer` flags loitering once dwell time exceeds `dwell_threshold` (default 30s). Footprint intrusion uses the bbox bottom-center and rate-limits alerts per Global ID (`geofence_cooldown`). Each alert writes a timestamped full-frame + crop to `alert_snapshots/` and a row in `border_alerts.db`. Pass `--no-anpr` to skip OCR and `--no-face-capture` to skip mugshots.
 
 Enable geofence events on Global IDs:
 

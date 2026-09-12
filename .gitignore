@@ -167,6 +167,7 @@ videos/*.avi
 # C2 evidence (generated at runtime)
 *.db
 alert_snapshots/
+face_database/
 
 # Compressed files
 *.zip
