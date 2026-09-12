@@ -73,6 +73,12 @@ class ActivityAnalyzer:
         self.last_alerts: list[Dict[str, object]] = []
         self.logger = logger if logger is not None else AlertLogger()
         self.direction_provider = direction_provider
+        # Share the live dwell clock with other alert producers (tripwire/geofence)
+        # that use the same AlertLogger instance.
+        try:
+            setattr(self.logger, "_dwell_time_provider", self.dwell_time)
+        except Exception:
+            pass
 
     def _key(self, camera_id: str, entity_id: EntityId) -> EntityKey:
         return (str(camera_id), str(entity_id))
@@ -146,8 +152,11 @@ class ActivityAnalyzer:
             )
             if self.logger is not None:
                 direction = None
-                if self.direction_provider is not None:
-                    direction = self.direction_provider(str(camera_id), entity_id)
+                provider = self.direction_provider
+                if provider is None:
+                    provider = getattr(self.logger, "_direction_provider", None)
+                if provider is not None:
+                    direction = provider(str(camera_id), entity_id)
                 self.logger.log_intrusion(
                     camera_id=camera_id,
                     global_id=numeric_entity_id(entity_id),
