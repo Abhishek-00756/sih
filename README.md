@@ -3,13 +3,15 @@
 Production starting blueprint for border CCTV: multiple cameras, local person tracks, OSNet body embeddings, and a centralized gallery that assigns a persistent **Global ID**.
 
 ```text
-Camera streams
+IP camera / RTSP
+  -> ThreadedCamera (latest frame)  video_stream.py
   -> YOLOv8 person detect
   -> ByteTrack local IDs
   -> OSNet 512-d embedding          extractor.py
   -> Spatio-temporal gallery        gallery_manager.py
   -> Persistent Global ID
-  -> Optional geofence events       geofence/
+  -> Footprint geofence overlay     geofence_manager.py
+  -> Optional confirmed events      geofence/
 ```
 
 ## Perception setup
@@ -30,10 +32,18 @@ Place feeds at `videos/camera1.mp4` and `videos/camera2.mp4`, or pass sources on
 python3 main.py --headless --source Cam_1_Outpost=videos/camera1.mp4 --source Cam_2_Gate=videos/camera2.mp4
 ```
 
+Live RTSP stays real-time: `ThreadedCamera` always exposes the newest decoded frame and drops OpenCV's internal backlog. Footprint intrusion uses the bbox bottom-center and rate-limits alerts per Global ID (`geofence_cooldown`).
+
 Enable geofence events on Global IDs:
 
 ```bash
 python3 main.py --headless --enable-geofence --config configs/perception.yaml
+```
+
+RTSP example:
+
+```bash
+python3 main.py --display --enable-geofence --source Sector_Alpha=rtsp://admin:pass@10.0.0.8/stream1
 ```
 
 Gallery-only tests (no GPU, no OSNet weights):
