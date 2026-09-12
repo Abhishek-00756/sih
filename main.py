@@ -32,6 +32,7 @@ from activity_analyzer import (
 from alert_logger import AlertLogger
 from anpr_manager import ANPRManager
 from extractor import PersonFeatureExtractor
+from face_manager import FaceManager
 from gallery_manager import GlobalGalleryManager
 from geofence_manager import GeofenceManager
 from video_stream import ThreadedCamera
@@ -192,6 +193,8 @@ def run_multi_camera_tracking(
     anpr_min_width: int = 150,
     anpr_min_height: int = 150,
     anpr_gpu: Optional[bool] = None,
+    enable_face_capture: bool = True,
+    face_save_dir: Optional[Path] = None,
 ) -> Dict[str, object]:
     from ultralytics import YOLO
 
@@ -233,6 +236,11 @@ def run_multi_camera_tracking(
     plates_recognized = 0
     if enable_anpr:
         anpr = ANPRManager(min_confidence=anpr_min_confidence, gpu=anpr_gpu)
+
+    face_mgr: Optional[FaceManager] = None
+    faces_captured = 0
+    if enable_face_capture:
+        face_mgr = FaceManager(save_dir=face_save_dir or ROOT / "face_database")
 
     caps = _open_captures(camera_sources)
     writers: Dict[str, cv2.VideoWriter] = {}
@@ -303,6 +311,15 @@ def run_multi_camera_tracking(
                             entity_id: Union[int, str] = result.global_id
                             color = _color_for_id(result.global_id)
                             label = f"{entity_type} GID {result.global_id} L{local_id}"
+                            if face_mgr is not None:
+                                saved = face_mgr.detect_and_save_face(
+                                    person_crop,
+                                    result.global_id,
+                                    cam_id,
+                                    timestamp=current_timestamp,
+                                )
+                                if saved:
+                                    faces_captured += 1
                             if overlay_geofence is not None:
                                 overlay_geofence.check_intrusion(
                                     frame,
@@ -466,6 +483,7 @@ def run_multi_camera_tracking(
         "loitering_alerts": loitering_alerts,
         "plates_recognized": plates_recognized,
         "known_plates": dict(known_plates),
+        "faces_captured": faces_captured,
         "gallery": gallery.snapshot(),
     }
     LOGGER.info(
@@ -497,6 +515,9 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--enable-anpr", action="store_true")
     parser.add_argument("--no-anpr", action="store_true")
     parser.add_argument("--anpr-min-confidence", type=float, default=None)
+    parser.add_argument("--enable-face-capture", action="store_true")
+    parser.add_argument("--no-face-capture", action="store_true")
+    parser.add_argument("--face-dir", default="")
     parser.add_argument("--cooldown", type=float, default=None)
     parser.add_argument("--alert-db", default="")
     parser.add_argument("--snapshot-dir", default="")
@@ -553,6 +574,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         anpr_min_width=int(cfg.get("anpr_min_width", 150)),
         anpr_min_height=int(cfg.get("anpr_min_height", 150)),
         anpr_gpu=cfg.get("anpr_gpu"),
+        enable_face_capture=(
+            bool(args.enable_face_capture or cfg.get("enable_face_capture", True))
+            and not args.no_face_capture
+        ),
+        face_save_dir=Path(args.face_dir)
+        if args.face_dir
+        else Path(cfg.get("face_save_dir", ROOT / "face_database")),
     )
     return 0
 
