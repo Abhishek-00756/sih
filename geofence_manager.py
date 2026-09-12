@@ -222,6 +222,14 @@ class GeofenceManager:
         self.last_alerts: List[Union[IntrusionAlert, TripwireAlert]] = []
         self.logger = logger
         self.dwell_provider = dwell_provider
+        if self.logger is not None:
+            # ActivityAnalyzer registers its live dwell provider on this logger.
+            # Expose our direction lookup too so loitering alerts can include a
+            # preceding inbound/outbound crossing in the same risk calculation.
+            try:
+                setattr(self.logger, "_direction_provider", self.last_direction_for)
+            except Exception:
+                pass
 
     @classmethod
     def from_zone_store(
@@ -399,8 +407,11 @@ class GeofenceManager:
             )
             if self.logger is not None:
                 dwell_time = None
-                if self.dwell_provider is not None:
-                    dwell_time = self.dwell_provider(
+                provider = self.dwell_provider
+                if provider is None:
+                    provider = getattr(self.logger, "_dwell_time_provider", None)
+                if provider is not None:
+                    dwell_time = provider(
                         str(source_camera_id or camera_id),
                         int(global_id),
                         float(timestamp),
