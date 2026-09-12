@@ -1,7 +1,8 @@
 """Persistent C2 audit trail for geofence intrusions.
 
-Writes timestamped full-frame and crop evidence to disk and records
-structured metadata (Global ID, camera, bbox, footprint) in SQLite.
+Creates a per-incident evidence folder, writes timestamped full-frame and
+crop snapshots, and records structured metadata (Global ID, camera, bbox,
+footprint) in SQLite for command-center search.
 """
 
 from __future__ import annotations
@@ -68,9 +69,22 @@ class AlertLogger:
                     bbox TEXT NOT NULL,
                     footprint TEXT,
                     snapshot_path TEXT NOT NULL,
-                    crop_path TEXT
+                    crop_path TEXT,
+                    incident_dir TEXT
                 )
                 """
+            )
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(security_alerts)")}
+            if "incident_dir" not in cols:
+                conn.execute("ALTER TABLE security_alerts ADD COLUMN incident_dir TEXT")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_alerts_camera ON security_alerts(camera_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_alerts_gid ON security_alerts(global_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_alerts_time ON security_alerts(unix_time)"
             )
             conn.commit()
 
@@ -98,6 +112,16 @@ class AlertLogger:
             return None
         return frame[y1:y2, x1:x2].copy()
 
+    def _incident_dir(self, camera_id: str, global_id: int, now: datetime) -> Path:
+        file_timestamp = now.strftime("%Y%m%d_%H%M%S_%f")
+        folder = (
+            self.snapshot_dir
+            / now.strftime("%Y%m%d")
+            / f"cam_{_safe_token(camera_id)}_gid_{int(global_id)}_{file_timestamp}"
+        )
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
     def log_intrusion(
         self,
         camera_id: str,
@@ -110,16 +134,13 @@ class AlertLogger:
         zone_name: str = "",
         footprint: Optional[Sequence[float]] = None,
     ) -> str:
-        """Save visual evidence and insert a searchable incident row."""
+        """Save visual evidence into an incident folder and insert a searchable row."""
         now = _utc_now(timestamp)
         timestamp_str = now.strftime("%Y-%m-%d %H:%M:%S")
-        file_timestamp = now.strftime("%Y%m%d_%H%M%S_%f")
         box: BBox = (int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3]))
-        cam = _safe_token(camera_id)
         gid = int(global_id)
-
-        filename = f"intrusion_cam_{cam}_gid_{gid}_{file_timestamp}.jpg"
-        filepath = self.snapshot_dir / filename
+        incident_dir = self._incident_dir(camera_id, gid, now)
+        filepath = incident_dir / "full.jpg"
         crop_path: Optional[Path] = None
 
         evidence = self._annotate(frame, box, gid, str(camera_id))
@@ -128,17 +149,32 @@ class AlertLogger:
 
         crop = self._crop(frame, box)
         if crop is not None and crop.size:
-            crop_path = self.snapshot_dir / f"crop_cam_{cam}_gid_{gid}_{file_timestamp}.jpg"
+            crop_path = incident_dir / "crop.jpg"
             cv2.imwrite(str(crop_path), crop)
+
+        payload = {
+            "timestamp": timestamp_str,
+            "unix_time": float(now.timestamp()),
+            "camera_id": str(camera_id),
+            "global_id": gid,
+            "alert_type": alert_type,
+            "zone_id": zone_id or None,
+            "zone_name": zone_name or None,
+            "bbox": list(box),
+            "footprint": [int(footprint[0]), int(footprint[1])] if footprint else None,
+            "snapshot_path": str(filepath),
+            "crop_path": str(crop_path) if crop_path else None,
+        }
+        (incident_dir / "meta.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
         with self._lock, self._connect() as conn:
             conn.execute(
                 """
                 INSERT INTO security_alerts (
                     timestamp, unix_time, camera_id, global_id, alert_type,
-                    zone_id, zone_name, bbox, footprint, snapshot_path, crop_path
+                    zone_id, zone_name, bbox, footprint, snapshot_path, crop_path, incident_dir
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     timestamp_str,
@@ -152,6 +188,7 @@ class AlertLogger:
                     json.dumps([int(footprint[0]), int(footprint[1])]) if footprint else None,
                     str(filepath),
                     str(crop_path) if crop_path else None,
+                    str(incident_dir),
                 ),
             )
             conn.commit()
@@ -165,9 +202,68 @@ class AlertLogger:
         return str(filepath)
 
     def recent(self, limit: int = 50) -> List[Dict[str, Any]]:
+        return self.search(limit=limit)
+
+    def get(self, alert_id: int) -> Optional[Dict[str, Any]]:
         with self._lock, self._connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM security_alerts ORDER BY id DESC LIMIT ?",
-                (int(limit),),
-            ).fetchall()
+            row = conn.execute(
+                "SELECT * FROM security_alerts WHERE id = ?",
+                (int(alert_id),),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def search(
+        self,
+        camera_id: Optional[str] = None,
+        global_id: Optional[int] = None,
+        alert_type: Optional[str] = None,
+        since: Optional[float] = None,
+        until: Optional[float] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        clauses: List[str] = []
+        params: List[Any] = []
+        if camera_id:
+            clauses.append("camera_id = ?")
+            params.append(str(camera_id))
+        if global_id is not None:
+            clauses.append("global_id = ?")
+            params.append(int(global_id))
+        if alert_type:
+            clauses.append("alert_type = ?")
+            params.append(str(alert_type))
+        if since is not None:
+            clauses.append("unix_time >= ?")
+            params.append(float(since))
+        if until is not None:
+            clauses.append("unix_time <= ?")
+            params.append(float(until))
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = (
+            f"SELECT * FROM security_alerts {where} "
+            "ORDER BY id DESC LIMIT ? OFFSET ?"
+        )
+        params.extend([max(1, int(limit)), max(0, int(offset))])
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(sql, params).fetchall()
         return [dict(row) for row in rows]
+
+    def stats(self) -> Dict[str, Any]:
+        with self._lock, self._connect() as conn:
+            total = conn.execute("SELECT COUNT(*) FROM security_alerts").fetchone()[0]
+            cameras = conn.execute(
+                "SELECT camera_id, COUNT(*) AS n FROM security_alerts GROUP BY camera_id ORDER BY n DESC"
+            ).fetchall()
+            types = conn.execute(
+                "SELECT alert_type, COUNT(*) AS n FROM security_alerts GROUP BY alert_type ORDER BY n DESC"
+            ).fetchall()
+            latest = conn.execute(
+                "SELECT timestamp FROM security_alerts ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        return {
+            "total": int(total),
+            "latest": None if latest is None else latest[0],
+            "by_camera": {row[0]: int(row[1]) for row in cameras},
+            "by_type": {row[0]: int(row[1]) for row in types},
+        }

@@ -304,6 +304,26 @@ def run_multi_camera_tracking(
                     events_emitted += len(events)
                     for ev in events:
                         LOGGER.info("GEOFENCE %s", json.dumps(ev.to_dict()))
+                        if alert_logger is None:
+                            continue
+                        ev_type = ev.event_type.value if hasattr(ev.event_type, "value") else str(ev.event_type)
+                        if ev_type != "GEOFENCE_ENTER":
+                            continue
+                        try:
+                            gid = int(ev.object_id)
+                        except (TypeError, ValueError):
+                            gid = 0
+                        alert_logger.log_intrusion(
+                            camera_id=cam_id,
+                            global_id=gid,
+                            frame=frame,
+                            bbox=ev.bounding_box,
+                            timestamp=ev.timestamp,
+                            alert_type=ev_type,
+                            zone_id=ev.zone_id,
+                            zone_name=ev.zone_name,
+                            footprint=ev.ground_contact_position,
+                        )
                 if overlay_geofence is not None:
                     events_emitted += len(overlay_geofence.pop_alerts())
 

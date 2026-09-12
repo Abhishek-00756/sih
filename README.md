@@ -53,6 +53,12 @@ Query recent incidents:
 sqlite3 border_alerts.db "SELECT id, timestamp, camera_id, global_id, snapshot_path FROM security_alerts ORDER BY id DESC LIMIT 10;"
 ```
 
+Each intrusion creates a dated incident folder under `alert_snapshots/` with `full.jpg`, `crop.jpg`, and `meta.json`. Open the C2 review console to search by Global ID / camera:
+
+```bash
+python3 c2_console.py --port 8080
+```
+
 Gallery-only tests (no GPU, no OSNet weights):
 
 ```bash
