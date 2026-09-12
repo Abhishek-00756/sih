@@ -51,7 +51,6 @@ def test_night_window_wraps_midnight():
 
 def test_utc_timestamp_is_converted_to_ist_before_night_check():
     scorer = RiskScorer()
-    # 19:00 UTC is 00:30 IST on the following day, so it is night.
     timestamp = datetime(2026, 1, 15, 19, 0, tzinfo=timezone.utc).timestamp()
     assert scorer.is_night(timestamp) is True
 
