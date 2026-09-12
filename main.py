@@ -31,6 +31,7 @@ from activity_analyzer import (
 )
 from alert_logger import AlertLogger
 from anpr_manager import ANPRManager
+from enhancer import VideoEnhancer
 from extractor import PersonFeatureExtractor
 from face_manager import FaceManager
 from gallery_manager import GlobalGalleryManager
@@ -142,6 +143,7 @@ def _tripwires_from_config(cfg: dict, cooldown: float) -> List[VirtualTripwire]:
                 wire_id=str(item.get("id") or item.get("wire_id") or "border"),
                 camera_id=item.get("camera_id"),
                 cooldown_seconds=float(item.get("cooldown_seconds", cooldown)),
+                inbound_positive=bool(item.get("inbound_positive", True)),
             )
         )
     return wires
@@ -226,6 +228,8 @@ def run_multi_camera_tracking(
     anpr_gpu: Optional[bool] = None,
     enable_face_capture: bool = True,
     face_save_dir: Optional[Path] = None,
+    enable_enhance: bool = True,
+    enhance_mode: str = "auto",
 ) -> Dict[str, object]:
     from ultralytics import YOLO
 
@@ -273,6 +277,8 @@ def run_multi_camera_tracking(
     if enable_face_capture:
         face_mgr = FaceManager(save_dir=face_save_dir or ROOT / "face_database")
 
+    enhancer: Optional[VideoEnhancer] = VideoEnhancer() if enable_enhance else None
+
     caps = _open_captures(camera_sources)
     writers: Dict[str, cv2.VideoWriter] = {}
     if output_dir is not None:
@@ -293,6 +299,8 @@ def run_multi_camera_tracking(
                 if not ret or frame is None:
                     continue
                 any_ok = True
+                if enhancer is not None:
+                    frame = enhancer.enhance_frame(frame, mode=enhance_mode)
                 geo_cam = (geofence_cfg or {}).get("geofence_camera_map", {}).get(cam_id, cam_id)
                 if overlay_geofence is not None:
                     overlay_geofence.draw_zones(frame, camera_id=geo_cam)
@@ -558,6 +566,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--enable-face-capture", action="store_true")
     parser.add_argument("--no-face-capture", action="store_true")
     parser.add_argument("--face-dir", default="")
+    parser.add_argument("--no-enhance", action="store_true")
+    parser.add_argument("--enhance-mode", default="")
     parser.add_argument("--cooldown", type=float, default=None)
     parser.add_argument("--alert-db", default="")
     parser.add_argument("--snapshot-dir", default="")
@@ -627,6 +637,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         face_save_dir=Path(args.face_dir)
         if args.face_dir
         else Path(cfg.get("face_save_dir", ROOT / "face_database")),
+        enable_enhance=bool(cfg.get("enable_enhance", True)) and not args.no_enhance,
+        enhance_mode=str(args.enhance_mode or cfg.get("enhance_mode", "auto")),
     )
     return 0
 

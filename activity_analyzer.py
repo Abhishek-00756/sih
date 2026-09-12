@@ -138,6 +138,7 @@ class ActivityAnalyzer:
                     alert_type="Loitering",
                     zone_name=str(entity_type),
                     footprint=_footprint(bbox),
+                    dwell_time=dwell_time,
                 )
         return frame
 

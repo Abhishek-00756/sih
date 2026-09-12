@@ -67,15 +67,32 @@ def test_tripwire_detects_line_crossing():
     assert len(alerts) == 1
     assert alerts[0].alert_type == "Tripwire Breach"
     assert alerts[0].wire_id == "fence"
+    assert alerts[0].direction in ("INBOUND", "OUTBOUND")
 
 
 def test_tripwire_ignores_parallel_motion():
     wire = VirtualTripwire((100, 200), (300, 200), wire_id="fence")
     frame = np.zeros((400, 400, 3), dtype=np.uint8)
-    frame, crossed = wire.check_crossing(frame, (150, 120), 8, camera_id="cam", timestamp=1.0, draw=False)
+    frame, crossed, direction = wire.check_crossing(frame, (150, 120), 8, camera_id="cam", timestamp=1.0, draw=False)
     assert crossed is False
-    frame, crossed = wire.check_crossing(frame, (250, 120), 8, camera_id="cam", timestamp=2.0, draw=False)
+    assert direction == "UNKNOWN"
+    frame, crossed, direction = wire.check_crossing(frame, (250, 120), 8, camera_id="cam", timestamp=2.0, draw=False)
     assert crossed is False
+
+
+def test_tripwire_reports_inbound_vs_outbound():
+    wire = VirtualTripwire((100, 200), (300, 200), wire_id="fence", inbound_positive=True)
+    frame = np.zeros((400, 400, 3), dtype=np.uint8)
+    frame, crossed, _ = wire.check_crossing(frame, (200, 120), 5, camera_id="cam", timestamp=1.0, draw=False)
+    assert crossed is False
+    frame, crossed, direction = wire.check_crossing(frame, (200, 280), 5, camera_id="cam", timestamp=2.0, draw=False)
+    assert crossed is True
+    assert direction == "INBOUND"
+    wire2 = VirtualTripwire((100, 200), (300, 200), wire_id="fence", inbound_positive=True)
+    frame, _, _ = wire2.check_crossing(frame, (200, 280), 6, camera_id="cam", timestamp=1.0, draw=False)
+    frame, crossed, direction = wire2.check_crossing(frame, (200, 120), 6, camera_id="cam", timestamp=2.0, draw=False)
+    assert crossed is True
+    assert direction == "OUTBOUND"
 
 
 def test_camera_scoped_zone_ignores_other_feeds():
