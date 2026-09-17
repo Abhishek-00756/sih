@@ -39,6 +39,7 @@ function renderCameras(cameras) {
           ${toggleButton(cam.camera_id, 'geofence', f.geofence, 'Geofence')}
           ${toggleButton(cam.camera_id, 'tripwire', f.tripwire, 'Tripwire')}
           ${toggleButton(cam.camera_id, 'anpr', f.anpr, 'ANPR')}
+          ${toggleButton(cam.camera_id, 'face_recognition', f.face_recognition, 'Face ID')}
           ${toggleButton(cam.camera_id, 'enhancement', f.enhancement, 'Enhance')}
         </div>
       </div>
