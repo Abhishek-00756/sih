@@ -4,7 +4,8 @@
 This first dashboard layer owns camera configuration and lightweight live-view
 capture. AI processing is deliberately controlled per camera so three live
 feeds can be displayed even when the Mac should process only selected feeds.
-Face recognition is exposed as a single shared registry, not a per-camera DB.
+Face recognition uses one shared registry, while each camera decides whether
+its detections participate in that global matcher.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 import cv2
+import numpy as np
 from flask import Flask, Response, jsonify, request, send_from_directory
 
 from cybersecurity.ledger_anchor import EvidenceLedger
@@ -70,16 +72,21 @@ class CameraView:
         last_source = None
         while not self._stop.is_set():
             if not self.enabled:
+                if cap is not None:
+                    cap.release()
+                    cap = None
+                    last_source = None
                 with self._lock:
                     self._status = "DISABLED"
                 time.sleep(0.5)
                 continue
 
+            resolved = self._resolve_source(self.source)
             if cap is None or last_source != self.source or not cap.isOpened():
                 if cap is not None:
                     cap.release()
                 last_source = self.source
-                cap = cv2.VideoCapture(self._resolve_source(self.source))
+                cap = cv2.VideoCapture(resolved)
                 if not cap.isOpened():
                     with self._lock:
                         self._status = "OFFLINE"
@@ -88,8 +95,8 @@ class CameraView:
 
             ok, frame = cap.read()
             if not ok or frame is None:
-                # Files behave like finite streams in development; loop them.
-                if isinstance(self._resolve_source(self.source), str):
+                # Local files are looped for dashboard demonstrations.
+                if isinstance(resolved, str) and Path(resolved).exists():
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     time.sleep(0.03)
                     continue
@@ -142,8 +149,9 @@ def _build_camera_views() -> Dict[str, CameraView]:
     return {cid: CameraView(cid, spec) for cid, spec in (config.get("cameras") or {}).items()}
 
 
+_CONFIG_AT_START = _load_config()
 CAMERAS = _build_camera_views()
-face_registry_config = (_load_config().get("shared_face_recognition") or {})
+face_registry_config = (_CONFIG_AT_START.get("shared_face_recognition") or {})
 FACE_REGISTRY = SharedFaceRegistry(
     registry_dir=ROOT / face_registry_config.get("registry_dir", "face_registry"),
     threshold=float(face_registry_config.get("match_threshold", 0.45)),
@@ -208,7 +216,7 @@ def update_camera_settings(camera_id: str):
     if "feature" in data and "value" in data:
         feature = str(data["feature"])
         features = spec.setdefault("features", {})
-        if feature not in {"geofence", "tripwire", "anpr", "enhancement"}:
+        if feature not in {"geofence", "tripwire", "anpr", "face_recognition", "enhancement"}:
             return jsonify({"error": "unsupported feature"}), 400
         features[feature] = bool(data["value"])
 
@@ -230,7 +238,7 @@ def enroll_face():
         return jsonify({"error": "person_id, display_name and image are required"}), 400
 
     raw = upload.read()
-    image = cv2.imdecode(__import__("numpy").frombuffer(raw, dtype="uint8"), cv2.IMREAD_COLOR)
+    image = cv2.imdecode(np.frombuffer(raw, dtype="uint8"), cv2.IMREAD_COLOR)
     if image is None:
         return jsonify({"error": "invalid image"}), 400
     try:
