@@ -42,7 +42,7 @@
   },
   "shared_face_recognition": {
     "enabled": true,
-    "model": "insightface",
+    "model": "buffalo_l",
     "match_threshold": 0.45,
     "registry_dir": "face_registry"
   }
