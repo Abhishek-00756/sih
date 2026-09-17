@@ -22,23 +22,26 @@ IP camera / RTSP
 
 ## Operator dashboard
 
-The new dashboard is the operator-facing layer. It keeps **ANPR camera-specific**, while face recognition is a **single shared registry across all cameras**.
+The new dashboard is the operator-facing layer. **ANPR is camera-specific. Face recognition is global but camera participation is configurable.** In other words, one central face registry is shared by the whole deployment, while each camera has a `face_recognition` switch deciding whether that camera sends detections into the shared matcher.
 
 ```text
 CAM-01 ─┐
-CAM-02 ─┼──> Shared perception / Global IDs
+CAM-02 ─┼──> Shared person gallery / Global IDs
 CAM-03 ─┘
    │
    ├── per-camera: AI processing
    ├── per-camera: geofence
    ├── per-camera: tripwire
    ├── per-camera: ANPR
+   ├── per-camera: face recognition participation
    └── per-camera: enhancement
 
-All cameras ──> optional face crop ──> GLOBAL FACE REGISTRY
+CAM-01 face crop ─┐
+CAM-03 face crop ─┼──> GLOBAL FACE REGISTRY
+CAM-02 (OFF)      ┘
 ```
 
-Camera settings live in `configs/cameras.json`. Each camera has its own AI switch plus geofence/tripwire/ANPR/enhancement flags. The dashboard can display three feeds concurrently while AI is selectively enabled, which avoids forcing the Mac to process all streams simultaneously.
+Camera settings live in `configs/cameras.json`. Each camera has its own AI switch plus geofence/tripwire/ANPR/face-recognition/enhancement flags. The dashboard can display three feeds concurrently while AI is selectively enabled, which avoids forcing the Mac to process all streams simultaneously.
 
 Start the dashboard with:
 
@@ -56,7 +59,7 @@ The old `face_manager.py` remains a lightweight Haar face-capture utility. The d
 python3 -m pip install --break-system-packages -r requirements-face.txt
 ```
 
-A person is enrolled once; the registry is not tied to a camera. Cameras can later be configured to submit face crops to this shared matcher.
+A person is enrolled once; the registry is not tied to a camera. Camera `face_recognition` flags determine which feeds can participate in matching.
 
 ### Evidence integrity / blockchain adapter
 
