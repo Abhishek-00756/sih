@@ -9,6 +9,7 @@
         "geofence": true,
         "tripwire": true,
         "anpr": false,
+        "face_recognition": true,
         "enhancement": true
       }
     },
@@ -21,6 +22,7 @@
         "geofence": true,
         "tripwire": false,
         "anpr": true,
+        "face_recognition": false,
         "enhancement": false
       }
     },
@@ -33,6 +35,7 @@
         "geofence": false,
         "tripwire": false,
         "anpr": false,
+        "face_recognition": false,
         "enhancement": false
       }
     }
