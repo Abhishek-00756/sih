@@ -7,11 +7,17 @@ pipeline. AI is controlled independently for every camera.
 
 Face recognition uses one shared registry, while each camera decides whether
 its detections participate in that global matcher.
+
+The dashboard also supports short-lived QR pairing for a browser-based mobile
+camera. The mobile page uses HTTPS and sends JPEG frames to the paired slot;
+RTSP/HTTP camera sources remain supported for existing deployments.
 """
 from __future__ import annotations
 
+import io
 import json
 import logging
+import socket
 import threading
 import time
 from pathlib import Path
@@ -19,16 +25,19 @@ from typing import Any, Dict, Optional, Union
 
 import cv2
 import numpy as np
-from flask import Flask, Response, jsonify, request, send_from_directory
+import qrcode
+from flask import Flask, Response, jsonify, request, send_file, send_from_directory
 
 from cybersecurity.ledger_anchor import EvidenceLedger
-from face_intelligence import SharedFaceRegistry
+from dashboard_pairing import PairingManager
 from dashboard_runtime import PerceptionController
+from face_intelligence import SharedFaceRegistry
 
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "configs" / "cameras.json"
 LOGGER = logging.getLogger("border.dashboard")
 app = Flask(__name__, static_folder="dashboard_static", static_url_path="/static")
+app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
 
 
 def _load_config() -> dict:
@@ -40,6 +49,27 @@ def _save_config(config: dict) -> None:
     tmp = CONFIG_PATH.with_suffix(".tmp")
     tmp.write_text(json.dumps(config, indent=2), encoding="utf-8")
     tmp.replace(CONFIG_PATH)
+
+
+def _lan_ip() -> str:
+    """Best-effort LAN address used in QR URLs; never falls back to localhost."""
+    candidates = []
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.connect(("8.8.8.8", 80))
+        candidates.append(sock.getsockname()[0])
+        sock.close()
+    except OSError:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            candidates.append(info[4][0])
+    except OSError:
+        pass
+    for addr in candidates:
+        if addr and not addr.startswith("127."):
+            return addr
+    return "127.0.0.1"
 
 
 class CameraView:
@@ -68,7 +98,7 @@ class CameraView:
         if text.isdigit():
             return int(text)
         path = Path(text)
-        if not path.is_absolute() and not text.startswith(("rtsp://", "http://", "https://")):
+        if not path.is_absolute() and not text.startswith(("rtsp://", "http://", "https://", "mobile://")):
             path = ROOT / path
         return str(path)
 
@@ -84,6 +114,14 @@ class CameraView:
                 with self._lock:
                     self._status = "DISABLED"
                 time.sleep(0.5)
+                continue
+
+            source_text = str(self.source)
+            if source_text.startswith("mobile://"):
+                with self._lock:
+                    age = time.time() - self._last_frame_at if self._last_frame_at else 999
+                    self._status = "ONLINE" if age < 3.0 else "WAITING FOR PHONE"
+                time.sleep(0.15)
                 continue
 
             resolved = self._resolve_source(self.source)
@@ -124,7 +162,9 @@ class CameraView:
 
     def jpeg(self) -> Optional[bytes]:
         with self._lock:
-            return self._processed_jpeg if self._processed_sequence == self._sequence and self._processed_jpeg else self._raw_jpeg
+            if self._processed_sequence == self._sequence and self._processed_jpeg:
+                return self._processed_jpeg
+            return self._raw_jpeg
 
     def frame(self) -> tuple[Optional[np.ndarray], int]:
         with self._lock:
@@ -144,17 +184,22 @@ class CameraView:
             self._processed_jpeg = encoded.tobytes()
             self._processed_sequence = self._sequence
 
-    def status(self) -> dict:
+    def set_remote_jpeg(self, jpeg_bytes: bytes) -> bool:
+        image = cv2.imdecode(np.frombuffer(jpeg_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            return False
+        ok, encoded = cv2.imencode(".jpg", image, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+        if not ok:
+            return False
         with self._lock:
-            return {
-                "camera_id": self.camera_id,
-                "name": self.name,
-                "source": self.source,
-                "enabled": self.enabled,
-                "status": self._status,
-                "last_frame_at": self._last_frame_at,
-                "sequence": self._sequence,
-            }
+            self._frame = image
+            self._raw_jpeg = encoded.tobytes()
+            self._processed_jpeg = None
+            self._processed_sequence = -1
+            self._sequence += 1
+            self._last_frame_at = time.time()
+            self._status = "ONLINE"
+        return True
 
     def set_source(self, source: Any) -> None:
         with self._lock:
@@ -168,14 +213,21 @@ class CameraView:
     def stop(self) -> None:
         self._stop.set()
 
-
-def _build_camera_views() -> Dict[str, CameraView]:
-    config = _load_config()
-    return {cid: CameraView(cid, spec) for cid, spec in (config.get("cameras") or {}).items()}
+    def status(self) -> dict:
+        with self._lock:
+            return {
+                "camera_id": self.camera_id,
+                "name": self.name,
+                "source": self.source,
+                "enabled": self.enabled,
+                "status": self._status,
+                "last_frame_at": self._last_frame_at,
+                "sequence": self._sequence,
+            }
 
 
 _CONFIG_AT_START = _load_config()
-CAMERAS = _build_camera_views()
+CAMERAS = {cid: CameraView(cid, spec) for cid, spec in (_CONFIG_AT_START.get("cameras") or {}).items()}
 face_registry_config = (_CONFIG_AT_START.get("shared_face_recognition") or {})
 FACE_REGISTRY = SharedFaceRegistry(
     registry_dir=ROOT / face_registry_config.get("registry_dir", "face_registry"),
@@ -183,11 +235,101 @@ FACE_REGISTRY = SharedFaceRegistry(
 )
 LEDGER = EvidenceLedger(ROOT / "border_evidence_ledger.db")
 PERCEPTION = PerceptionController(CAMERAS, FACE_REGISTRY, LEDGER)
+PAIRING = PairingManager(ttl_seconds=300)
 
 
 @app.get("/")
 def index() -> Response:
     return send_from_directory(ROOT / "dashboard_static", "index.html")
+
+
+@app.get("/pair/<token>")
+def mobile_pair(token: str):
+    session = PAIRING.get(token)
+    if session is None:
+        return "Pairing link expired or invalid.", 404
+    return send_from_directory(ROOT / "dashboard_static", "mobile_camera.html")
+
+
+@app.post("/api/pairing/create")
+def create_pairing():
+    data = request.get_json(silent=True) or {}
+    camera_id = str(data.get("camera_id", "")).strip()
+    if camera_id not in CAMERAS:
+        return jsonify({"error": "camera not found"}), 404
+    scheme = "https"
+    dashboard_url = f"{scheme}://{_lan_ip()}:8443"
+    session = PAIRING.create(camera_id, dashboard_url)
+    config = _load_config()
+    spec = config.setdefault("cameras", {}).get(camera_id, {})
+    spec["enabled"] = True
+    spec["source"] = f"mobile://{session.token}"
+    CAMERAS[camera_id].set_enabled(True)
+    CAMERAS[camera_id].set_source(spec["source"])
+    _save_config(config)
+    return jsonify({
+        "ok": True,
+        "camera_id": camera_id,
+        "camera_name": spec.get("name", camera_id),
+        "pairing_url": f"{dashboard_url}/pair/{session.token}",
+        "expires_at": session.payload["expires_at"],
+        "fingerprint": PAIRING.fingerprint(session.token),
+    })
+
+
+@app.get("/api/pairing/<token>/qr.png")
+def pairing_qr(token: str):
+    session = PAIRING.get(token)
+    if session is None:
+        return jsonify({"error": "pairing expired"}), 404
+    image = qrcode.make(f"{session.payload['dashboard_url']}/pair/{token}")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    buffer.seek(0)
+    return send_file(buffer, mimetype="image/png", max_age=0)
+
+
+@app.get("/api/pairing/<token>/status")
+def pairing_status(token: str):
+    session = PAIRING.get(token)
+    if session is None:
+        return jsonify({"error": "pairing expired"}), 404
+    view = CAMERAS[session.camera_id]
+    return jsonify({
+        "camera_id": session.camera_id,
+        "camera_name": view.name,
+        "status": view.status().get("status"),
+        "last_frame_at": view.status().get("last_frame_at"),
+        "expires_at": session.expires_at,
+    })
+
+
+@app.post("/api/pairing/<token>/frame")
+def pairing_frame(token: str):
+    session = PAIRING.get(token)
+    if session is None:
+        return jsonify({"error": "pairing expired"}), 404
+    raw = request.get_data(cache=False)
+    if not raw:
+        return jsonify({"error": "empty frame"}), 400
+    view = CAMERAS.get(session.camera_id)
+    if view is None:
+        return jsonify({"error": "camera not found"}), 404
+    if not view.set_remote_jpeg(raw):
+        return jsonify({"error": "invalid jpeg"}), 400
+    return jsonify({"ok": True, "camera_id": session.camera_id})
+
+
+@app.post("/api/pairing/<token>/disconnect")
+def pairing_disconnect(token: str):
+    session = PAIRING.get(token)
+    if session is None:
+        return jsonify({"error": "pairing expired"}), 404
+    view = CAMERAS[session.camera_id]
+    view.set_remote_jpeg(view.jpeg() or b"") if False else None
+    with view._lock:
+        view._status = "WAITING FOR PHONE"
+    return jsonify({"ok": True})
 
 
 @app.get("/api/state")
@@ -217,18 +359,15 @@ def camera_stream(camera_id: str):
         return jsonify({"error": "camera not found"}), 404
 
     def generate():
-        last_payload = None
+        last_sequence = -1
         while True:
             frame = view.jpeg()
-            if frame is None:
-                time.sleep(0.1)
-                continue
-            if frame == last_payload:
+            current_sequence = view.status()["sequence"]
+            if frame is None or current_sequence == last_sequence:
                 time.sleep(0.03)
                 continue
-            last_payload = frame
+            last_sequence = current_sequence
             yield b"--frame\r\nContent-Type: image/jpeg\r\nCache-Control: no-cache\r\nPragma: no-cache\r\n\r\n" + frame + b"\r\n"
-            time.sleep(0.03)
 
     return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
@@ -297,6 +436,12 @@ def test_anchor():
     return jsonify(LEDGER.anchor(data))
 
 
+def _run_https():
+    # Local development HTTPS so phone browsers can access camera APIs.
+    app.run(host="0.0.0.0", port=8443, threaded=True, debug=False, ssl_context="adhoc")
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    threading.Thread(target=_run_https, name="https-dashboard", daemon=True).start()
     app.run(host="0.0.0.0", port=8080, threaded=True, debug=False)
