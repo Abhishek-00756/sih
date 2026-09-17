@@ -1,0 +1,2 @@
+# Dashboard QR/mobile-camera pairing
+qrcode[pil]>=7.4
