@@ -1,4 +1,4 @@
-const state = { cameras: [] };
+const state = { cameras: [], pairing: null };
 
 function esc(value) {
   return String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
@@ -107,6 +107,86 @@ function renderLedger(ledger) {
   document.getElementById('ledgerHead').textContent = ledger.head_hash ? ledger.head_hash.slice(0, 24) + '…' : '—';
 }
 
+function openPairModal() {
+  document.getElementById('pairModal').classList.remove('hidden');
+  const select = document.getElementById('pairCamera');
+  select.innerHTML = state.cameras.map(c => `<option value="${esc(c.camera_id)}">${esc(c.camera_id)} · ${esc(c.name)}</option>`).join('');
+  const preferred = state.cameras.find(c => !c.enabled || c.status === 'DISABLED' || c.status === 'WAITING FOR PHONE');
+  if (preferred) select.value = preferred.camera_id;
+  resetPairModal();
+}
+
+function closePairModal() {
+  document.getElementById('pairModal').classList.add('hidden');
+  state.pairing = null;
+}
+
+function resetPairModal() {
+  document.getElementById('qrBox').classList.add('hidden');
+  document.getElementById('copyPair').classList.add('hidden');
+  document.getElementById('qrImage').src = '';
+  document.getElementById('qrState').textContent = 'CREATE A PAIRING TO CONTINUE';
+  document.getElementById('pairHint').textContent = 'The QR link is short-lived. The phone and laptop must be on the same network.';
+}
+
+async function createPairing() {
+  const camera_id = document.getElementById('pairCamera').value;
+  const btn = document.getElementById('createPair');
+  btn.disabled = true;
+  document.getElementById('qrState').textContent = 'GENERATING QR…';
+  try {
+    const res = await fetch('/api/pairing/create', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({camera_id})
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Could not create pairing');
+    state.pairing = data;
+    document.getElementById('qrImage').src = `/api/pairing/${encodeURIComponent(data.fingerprint ? data.pairing_url.split('/').pop() : '')}/qr.png`;
+    document.getElementById('qrImage').onerror = () => { document.getElementById('qrState').textContent = 'QR IMAGE FAILED — USE THE PAIRING LINK BELOW'; };
+    document.getElementById('qrBox').classList.remove('hidden');
+    document.getElementById('copyPair').classList.remove('hidden');
+    document.getElementById('pairCameraLabel').textContent = `${data.camera_id} · ${data.camera_name}`;
+    document.getElementById('pairFingerprint').textContent = `PAIR ${data.fingerprint}`;
+    document.getElementById('pairExpiry').textContent = `EXPIRES ${new Date(data.expires_at * 1000).toLocaleTimeString()}`;
+    document.getElementById('qrState').textContent = 'SCAN WITH PHONE';
+    document.getElementById('pairHint').innerHTML = `Open the QR link on the phone. Because the camera page uses HTTPS, the phone may show a certificate warning for this local development server. Continue to the page and allow camera access.`;
+    waitForPair(data.token || data.pairing_url.split('/').pop());
+  } catch (err) {
+    document.getElementById('qrState').textContent = 'PAIRING FAILED';
+    document.getElementById('pairHint').textContent = err.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function waitForPair(token) {
+  for (let i = 0; i < 150; i++) {
+    await new Promise(r => setTimeout(r, 1000));
+    if (!state.pairing) return;
+    try {
+      const res = await fetch(`/api/pairing/${encodeURIComponent(token)}/status`, {cache:'no-store'});
+      const data = await res.json();
+      if (!res.ok) return;
+      if (data.status === 'ONLINE') {
+        document.getElementById('qrState').textContent = `${data.camera_id} CONNECTED`;
+        document.getElementById('pairHint').textContent = 'Phone camera is live. Close this dialog or leave it open while operating.';
+        await loadState();
+        return;
+      }
+    } catch (e) { return; }
+  }
+}
+
+async function copyPairingLink() {
+  if (!state.pairing?.pairing_url) return;
+  try {
+    await navigator.clipboard.writeText(state.pairing.pairing_url);
+    document.getElementById('pairHint').textContent = 'Pairing link copied.';
+  } catch {
+    document.getElementById('pairHint').textContent = state.pairing.pairing_url;
+  }
+}
+
 document.getElementById('enrollForm').addEventListener('submit', async e => {
   e.preventDefault();
   const form = new FormData(e.target);
@@ -119,6 +199,14 @@ document.getElementById('enrollForm').addEventListener('submit', async e => {
   e.target.reset();
   await loadState();
 });
+
+document.getElementById('addCameraBtn').addEventListener('click', openPairModal);
+document.getElementById('closePair').addEventListener('click', closePairModal);
+document.getElementById('pairModal').addEventListener('click', e => { if (e.target.id === 'pairModal') closePairModal(); });
+document.getElementById('createPair').addEventListener('click', createPairing);
+document.getElementById('copyPair').addEventListener('click', copyPairingLink);
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closePairModal(); });
 
 function tick() {
   document.getElementById('clock').textContent = new Date().toLocaleString();
