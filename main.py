@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Multi-camera Shared Perception loop: YOLOv8 + ByteTrack + OSNet + Global IDs.
 
-Optionally forwards tracks into the existing geofence engine so Global IDs
-(not per-camera local IDs) drive ENTER/EXIT events.
+Per-camera runtime switches come from configs/cameras.json when available.
+ANPR, geofence, tripwire, enhancement and face-recognition participation can
+therefore be enabled independently for each camera. Face recognition itself
+uses one shared registry across the process.
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ from alert_logger import AlertLogger
 from anpr_manager import ANPRManager
 from enhancer import VideoEnhancer
 from extractor import PersonFeatureExtractor
+from face_intelligence import SharedFaceRegistry
 from face_manager import FaceManager
 from gallery_manager import GlobalGalleryManager
 from geofence_manager import GeofenceManager, VirtualTripwire
@@ -41,6 +44,7 @@ from video_stream import ThreadedCamera
 LOGGER = logging.getLogger("perception")
 
 SourceMap = Mapping[str, Union[str, int]]
+FeatureMap = Mapping[str, Mapping[str, bool]]
 
 
 def _load_config(path: Optional[Path]) -> dict:
@@ -53,6 +57,64 @@ def _load_config(path: Optional[Path]) -> dict:
     if not isinstance(data, dict):
         raise ValueError("perception config must be a mapping")
     return data
+
+
+def _load_dashboard_feature_config(path: Optional[Path] = None) -> Dict[str, Dict[str, bool]]:
+    """Load dashboard camera feature switches keyed by both camera ID and source."""
+    config_path = path or ROOT / "configs" / "cameras.json"
+    if not config_path.exists():
+        return {}
+    try:
+        payload = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        LOGGER.warning("Could not load dashboard camera config %s: %s", config_path, exc)
+        return {}
+
+    result: Dict[str, Dict[str, bool]] = {}
+    for camera_id, spec in (payload.get("cameras") or {}).items():
+        if not isinstance(spec, dict):
+            continue
+        features = spec.get("features") or {}
+        merged = {
+            "ai_enabled": bool(spec.get("ai_enabled", True)),
+            "geofence": bool(features.get("geofence", True)),
+            "tripwire": bool(features.get("tripwire", True)),
+            "anpr": bool(features.get("anpr", True)),
+            "face_recognition": bool(features.get("face_recognition", True)),
+            "enhancement": bool(features.get("enhancement", True)),
+        }
+        result[str(camera_id)] = merged
+        source = spec.get("source")
+        if source is not None:
+            result[f"source::{source}"] = merged
+    return result
+
+
+def _features_for_camera(
+    camera_id: str,
+    source: Union[str, int],
+    dashboard_features: Optional[FeatureMap],
+) -> Dict[str, bool]:
+    """Resolve dashboard settings by camera ID, then by configured source."""
+    if not dashboard_features:
+        return {
+            "ai_enabled": True,
+            "geofence": True,
+            "tripwire": True,
+            "anpr": True,
+            "face_recognition": True,
+            "enhancement": True,
+        }
+    if camera_id in dashboard_features:
+        return dict(dashboard_features[camera_id])
+    return dict(dashboard_features.get(f"source::{source}") or {
+        "ai_enabled": True,
+        "geofence": True,
+        "tripwire": True,
+        "anpr": True,
+        "face_recognition": True,
+        "enhancement": True,
+    })
 
 
 def _parse_sources(raw: Iterable[str]) -> Dict[str, Union[str, int]]:
@@ -230,10 +292,18 @@ def run_multi_camera_tracking(
     face_save_dir: Optional[Path] = None,
     enable_enhance: bool = True,
     enhance_mode: str = "auto",
+    dashboard_features: Optional[FeatureMap] = None,
+    face_registry_dir: Optional[Path] = None,
+    face_registry_threshold: float = 0.45,
+    face_registry_model: str = "buffalo_l",
 ) -> Dict[str, object]:
     from ultralytics import YOLO
 
     detect_classes = list(track_classes) if track_classes is not None else list(TRACK_CLASSES)
+    resolved_features = {
+        cam_id: _features_for_camera(cam_id, camera_sources[cam_id], dashboard_features)
+        for cam_id in camera_sources
+    }
 
     # One detector/tracker per camera so ByteTrack IDs never mix across streams.
     detectors = {cam_id: YOLO(detector_weights) for cam_id in camera_sources}
@@ -269,13 +339,23 @@ def run_multi_camera_tracking(
     anpr: Optional[ANPRManager] = None
     known_plates: Dict[str, str] = {}
     plates_recognized = 0
-    if enable_anpr:
+    if enable_anpr and any(spec.get("anpr", True) for spec in resolved_features.values()):
         anpr = ANPRManager(min_confidence=anpr_min_confidence, gpu=anpr_gpu)
 
     face_mgr: Optional[FaceManager] = None
     faces_captured = 0
-    if enable_face_capture:
+    if enable_face_capture and any(spec.get("face_recognition", True) for spec in resolved_features.values()):
         face_mgr = FaceManager(save_dir=face_save_dir or ROOT / "face_database")
+
+    shared_face_registry: Optional[SharedFaceRegistry] = None
+    if any(spec.get("face_recognition", True) for spec in resolved_features.values()):
+        shared_face_registry = SharedFaceRegistry(
+            registry_dir=face_registry_dir or ROOT / "face_registry",
+            threshold=face_registry_threshold,
+            model_name=face_registry_model,
+        )
+        if not shared_face_registry.available:
+            LOGGER.warning("Shared face recognition is unavailable; face participation is idle.")
 
     enhancer: Optional[VideoEnhancer] = VideoEnhancer() if enable_enhance else None
 
@@ -299,19 +379,29 @@ def run_multi_camera_tracking(
                 if not ret or frame is None:
                     continue
                 any_ok = True
-                if enhancer is not None:
+                features = resolved_features.get(cam_id, {})
+                ai_enabled = features.get("ai_enabled", True)
+                camera_geofence = enable_geofence and features.get("geofence", True)
+                camera_tripwire = camera_geofence and features.get("tripwire", True)
+                camera_anpr = enable_anpr and features.get("anpr", True)
+                camera_face = enable_face_capture and features.get("face_recognition", True)
+                camera_enhance = enable_enhance and features.get("enhancement", True)
+
+                if enhancer is not None and camera_enhance:
                     frame = enhancer.enhance_frame(frame, mode=enhance_mode)
                 geo_cam = (geofence_cfg or {}).get("geofence_camera_map", {}).get(cam_id, cam_id)
-                if overlay_geofence is not None:
+                if overlay_geofence is not None and camera_geofence:
                     overlay_geofence.draw_zones(frame, camera_id=geo_cam)
 
-                results = detectors[cam_id].track(
-                    frame,
-                    persist=True,
-                    classes=detect_classes,
-                    tracker="bytetrack.yaml",
-                    verbose=False,
-                )
+                results = []
+                if ai_enabled:
+                    results = detectors[cam_id].track(
+                        frame,
+                        persist=True,
+                        classes=detect_classes,
+                        tracker="bytetrack.yaml",
+                        verbose=False,
+                    )
 
                 geo_records = []
                 current_active_ids: List[Union[int, str]] = []
@@ -350,16 +440,23 @@ def run_multi_camera_tracking(
                             entity_id: Union[int, str] = result.global_id
                             color = _color_for_id(result.global_id)
                             label = f"{entity_type} GID {result.global_id} L{local_id}"
-                            if face_mgr is not None:
-                                saved = face_mgr.detect_and_save_face(
-                                    person_crop,
-                                    result.global_id,
-                                    cam_id,
-                                    timestamp=current_timestamp,
-                                )
-                                if saved:
-                                    faces_captured += 1
-                            if overlay_geofence is not None:
+
+                            if camera_face:
+                                if face_mgr is not None:
+                                    saved = face_mgr.detect_and_save_face(
+                                        person_crop,
+                                        result.global_id,
+                                        cam_id,
+                                        timestamp=current_timestamp,
+                                    )
+                                    if saved:
+                                        faces_captured += 1
+                                if shared_face_registry is not None and shared_face_registry.available:
+                                    match = shared_face_registry.match(person_crop)
+                                    if match:
+                                        label += f" | {match['display_name']} {match['similarity']:.0%}"
+
+                            if overlay_geofence is not None and camera_geofence:
                                 overlay_geofence.check_intrusion(
                                     frame,
                                     bbox,
@@ -368,14 +465,15 @@ def run_multi_camera_tracking(
                                     timestamp=current_timestamp,
                                     source_camera_id=cam_id,
                                 )
-                                overlay_geofence.check_tripwire(
-                                    frame,
-                                    bbox,
-                                    result.global_id,
-                                    camera_id=geo_cam,
-                                    timestamp=current_timestamp,
-                                    source_camera_id=cam_id,
-                                )
+                                if camera_tripwire:
+                                    overlay_geofence.check_tripwire(
+                                        frame,
+                                        bbox,
+                                        result.global_id,
+                                        camera_id=geo_cam,
+                                        timestamp=current_timestamp,
+                                        source_camera_id=cam_id,
+                                    )
                             geo_records.append(
                                 {
                                     "camera_id": cam_id,
@@ -393,7 +491,8 @@ def run_multi_camera_tracking(
                             plate_key = f"{cam_id}:{entity_id}"
                             plate_text = known_plates.get(plate_key)
                             if (
-                                anpr is not None
+                                camera_anpr
+                                and anpr is not None
                                 and plate_text is None
                                 and anpr.crop_is_readable(
                                     x2 - x1,
@@ -457,7 +556,7 @@ def run_multi_camera_tracking(
                     analyzer.cleanup_stale_tracks(current_active_ids, camera_id=cam_id)
                     loitering_alerts += len(analyzer.pop_alerts())
 
-                if enable_geofence and geo_engine is not None and geo_iface is not None:
+                if camera_geofence and geo_engine is not None and geo_iface is not None:
                     tracks = geo_iface.parse_frame(
                         geo_records, camera_id=cam_id, timestamp=current_timestamp
                     )
@@ -487,7 +586,7 @@ def run_multi_camera_tracking(
                             zone_name=ev.zone_name,
                             footprint=ev.ground_contact_position,
                         )
-                if overlay_geofence is not None:
+                if overlay_geofence is not None and camera_geofence:
                     events_emitted += len(overlay_geofence.pop_alerts())
 
                 if display and not headless:
@@ -531,6 +630,8 @@ def run_multi_camera_tracking(
         "plates_recognized": plates_recognized,
         "known_plates": dict(known_plates),
         "faces_captured": faces_captured,
+        "face_registry": shared_face_registry.status() if shared_face_registry is not None else None,
+        "camera_features": resolved_features,
         "gallery": gallery.snapshot(),
     }
     LOGGER.info(
@@ -599,6 +700,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not zones.is_absolute():
         zones = ROOT / zones
 
+    dashboard_cfg = _load_dashboard_feature_config()
+    face_cfg_path = ROOT / "configs" / "cameras.json"
+    face_cfg = {}
+    if face_cfg_path.exists():
+        try:
+            raw_face_cfg = json.loads(face_cfg_path.read_text(encoding="utf-8")).get("shared_face_recognition") or {}
+            face_cfg = raw_face_cfg if isinstance(raw_face_cfg, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            face_cfg = {}
+
     run_multi_camera_tracking(
         camera_sources=sources,
         similarity_threshold=float(args.threshold or cfg.get("similarity_threshold", 0.75)),
@@ -639,6 +750,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         else Path(cfg.get("face_save_dir", ROOT / "face_database")),
         enable_enhance=bool(cfg.get("enable_enhance", True)) and not args.no_enhance,
         enhance_mode=str(args.enhance_mode or cfg.get("enhance_mode", "auto")),
+        dashboard_features=dashboard_cfg,
+        face_registry_dir=Path(face_cfg.get("registry_dir", ROOT / "face_registry")),
+        face_registry_threshold=float(face_cfg.get("match_threshold", 0.45)),
+        face_registry_model=str(face_cfg.get("model", "buffalo_l")),
     )
     return 0
 
