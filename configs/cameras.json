@@ -1,0 +1,46 @@
+{
+  "cameras": {
+    "CAM-01": {
+      "name": "Outpost Alpha",
+      "source": "videos/camera1.mp4",
+      "enabled": true,
+      "ai_enabled": true,
+      "features": {
+        "geofence": true,
+        "tripwire": true,
+        "anpr": false,
+        "enhancement": true
+      }
+    },
+    "CAM-02": {
+      "name": "Gate Bravo",
+      "source": "videos/camera2.mp4",
+      "enabled": true,
+      "ai_enabled": true,
+      "features": {
+        "geofence": true,
+        "tripwire": false,
+        "anpr": true,
+        "enhancement": false
+      }
+    },
+    "CAM-03": {
+      "name": "Sector Charlie",
+      "source": "0",
+      "enabled": false,
+      "ai_enabled": false,
+      "features": {
+        "geofence": false,
+        "tripwire": false,
+        "anpr": false,
+        "enhancement": false
+      }
+    }
+  },
+  "shared_face_recognition": {
+    "enabled": true,
+    "model": "insightface",
+    "match_threshold": 0.45,
+    "registry_dir": "face_registry"
+  }
+}
