@@ -16,10 +16,51 @@ IP camera / RTSP
   -> Context risk score (0-100)     risk_scorer.py
   -> Dwell-time loitering           activity_analyzer.py
   -> Vehicle crop OCR (ANPR)        anpr_manager.py
-  -> Haar face mugshot (one/GID)    face_manager.py
-  -> SQLite evidence + SHA-256 chain alert_logger.py
-  -> Optional confirmed events      geofence/
+  -> Shared face registry           face_intelligence.py
+  -> Evidence + integrity ledger    alert_logger.py / cybersecurity/
 ```
+
+## Operator dashboard
+
+The new dashboard is the operator-facing layer. It keeps **ANPR camera-specific**, while face recognition is a **single shared registry across all cameras**.
+
+```text
+CAM-01 ─┐
+CAM-02 ─┼──> Shared perception / Global IDs
+CAM-03 ─┘
+   │
+   ├── per-camera: AI processing
+   ├── per-camera: geofence
+   ├── per-camera: tripwire
+   ├── per-camera: ANPR
+   └── per-camera: enhancement
+
+All cameras ──> optional face crop ──> GLOBAL FACE REGISTRY
+```
+
+Camera settings live in `configs/cameras.json`. Each camera has its own AI switch plus geofence/tripwire/ANPR/enhancement flags. The dashboard can display three feeds concurrently while AI is selectively enabled, which avoids forcing the Mac to process all streams simultaneously.
+
+Start the dashboard with:
+
+```bash
+python3 dashboard_server.py
+```
+
+Then open `http://localhost:8080`. The dashboard currently provides live MJPEG views, persistent per-camera settings, a shared face-enrollment registry, face-recognition backend status, and local evidence-ledger verification.
+
+### Shared face recognition
+
+The old `face_manager.py` remains a lightweight Haar face-capture utility. The dashboard's actual recognition registry is `face_intelligence.py`. It uses InsightFace when installed and stores enrolled face embeddings under `face_registry/`. Install its optional dependencies with:
+
+```bash
+python3 -m pip install --break-system-packages -r requirements-face.txt
+```
+
+A person is enrolled once; the registry is not tied to a camera. Cameras can later be configured to submit face crops to this shared matcher.
+
+### Evidence integrity / blockchain adapter
+
+`cybersecurity/ledger_anchor.py` provides a small anchoring interface. The current implementation is a local SHA-256 hash chain for immediate tamper-evident evidence integrity. It is intentionally separated so a permissioned blockchain implementation can be added later without changing dashboard evidence payloads.
 
 ## Perception setup
 
@@ -59,7 +100,7 @@ Query recent incidents:
 sqlite3 border_alerts.db "SELECT id, timestamp, camera_id, global_id, risk_score, risk_label, direction, snapshot_path FROM security_alerts ORDER BY id DESC LIMIT 10;"
 ```
 
-Each intrusion creates a dated incident folder under `alert_snapshots/` with `full.jpg`, `crop.jpg`, and `meta.json`. Open the C2 review console to search by Global ID / camera:
+Each intrusion creates a dated incident folder under `alert_snapshots/` with `full.jpg`, `crop.jpg`, and `meta.json`. Open the legacy C2 review console to search by Global ID / camera:
 
 ```bash
 python3 c2_console.py --port 8080
