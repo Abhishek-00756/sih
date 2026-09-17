@@ -3,8 +3,8 @@
 Production starting blueprint for border CCTV: multiple cameras, local person tracks, OSNet body embeddings, and a centralized gallery that assigns a persistent **Global ID**.
 
 ```text
-IP camera / RTSP
-  -> ThreadedCamera (latest frame)  video_stream.py
+IP camera / RTSP or paired mobile camera
+  -> ThreadedCamera / mobile frame receiver
   -> YOLOv8 person detect
   -> ByteTrack local IDs
   -> OSNet 512-d embedding          extractor.py
@@ -22,7 +22,7 @@ IP camera / RTSP
 
 ## Operator dashboard
 
-The new dashboard is the operator-facing layer. **ANPR is camera-specific. Face recognition is global but camera participation is configurable.** In other words, one central face registry is shared by the whole deployment, while each camera has a `face_recognition` switch deciding whether that camera sends detections into the shared matcher.
+The dashboard is the operator-facing layer. **ANPR is camera-specific. Face recognition uses one global registry, while camera participation is configurable.** One central face registry is shared by the deployment, and each camera has its own `face_recognition` switch deciding whether that camera sends detections into the shared matcher.
 
 ```text
 CAM-01 ─┐
@@ -33,7 +33,7 @@ CAM-03 ─┘
    ├── per-camera: geofence
    ├── per-camera: tripwire
    ├── per-camera: ANPR
-   ├── per-camera: face recognition participation
+   ├── per-camera: face-recognition participation
    └── per-camera: enhancement
 
 CAM-01 face crop ─┐
@@ -49,7 +49,40 @@ Start the dashboard with:
 python3 dashboard_server.py
 ```
 
-Then open `http://localhost:8080`. The dashboard currently provides live MJPEG views, persistent per-camera settings, a shared face-enrollment registry, face-recognition backend status, and local evidence-ledger verification.
+Then open `http://localhost:8080`. The dashboard provides live views, per-camera runtime controls, a shared face-enrollment registry, face-recognition backend status, local evidence-ledger verification, and QR onboarding for browser-based mobile cameras.
+
+### QR mobile-camera pairing
+
+Click **+ ADD CAMERA** in the dashboard and choose a camera slot. BORDER SENTINEL creates a short-lived QR pairing session and shows the QR code. Scan it with a phone on the same LAN/Wi-Fi; the phone opens a secure local camera page, grants browser camera permission, and sends JPEG frames to the paired camera slot.
+
+```text
+Desktop dashboard
+      |
+      | Generate QR
+      v
+   QR pairing
+      |
+      | scan
+      v
+   Phone browser
+      |
+      | camera frames over HTTPS
+      v
+CAM-03 / selected slot
+      |
+      v
+Shared perception + dashboard
+```
+
+The dashboard keeps HTTP on `8080` and also starts a local development HTTPS server on `8443` for the mobile camera page because browser camera APIs require a secure context. A development certificate warning may appear on the phone; continue to the local page and allow camera access. Pairing tokens expire after five minutes and should not be treated as permanent credentials.
+
+Install the QR dependency with:
+
+```bash
+python3 -m pip install --break-system-packages -r requirements-dashboard.txt
+```
+
+RTSP and HTTP camera URLs remain supported for direct camera integrations.
 
 ### Shared face recognition
 
@@ -77,10 +110,10 @@ If `torchreid` is missing (needed for production OSNet, not for gallery unit tes
 python3 -m pip install --break-system-packages git+https://github.com/KaiyangZhou/deep-person-reid.git
 ```
 
-Place feeds at `videos/camera1.mp4` and `videos/camera2.mp4`, or pass sources on the CLI. Webcam indices and RTSP URLs also work.
+Place feeds at `videos/camera1.mp4` and `videos/cam2.mp4`, or pass sources on the CLI. Webcam indices and RTSP URLs also work.
 
 ```bash
-python3 main.py --headless --source Cam_1_Outpost=videos/camera1.mp4 --source Cam_2_Gate=videos/camera2.mp4
+python3 main.py --headless --source Cam_1_Outpost=videos/camera1.mp4 --source Cam_2_Gate=videos/cam2.mp4
 ```
 
 Live RTSP stays real-time: `ThreadedCamera` always exposes the newest decoded frame and drops OpenCV's internal backlog. YOLOv8 tracks COCO classes `[0, 2, 3, 5, 7]` (person, car, motorcycle, bus, truck). Persons get OSNet Global IDs and geofence checks; vehicles keep ByteTrack IDs (`V-<id>`) and skip Re-ID. Nearby vehicle crops (bbox larger than `anpr_min_width` x `anpr_min_height`, default 150px) are passed to EasyOCR once per track; recognized plates replace the overlay label and are cached in `known_plates`. Person body crops are scanned with OpenCV Haar Cascade; the first frontal face per Global ID is saved under `face_database/`. `ActivityAnalyzer` flags loitering once dwell time exceeds `dwell_threshold` (default 30s). Footprint intrusion uses the bbox bottom-center and rate-limits alerts per Global ID (`geofence_cooldown`). CLAHE (`enhancer.py`) lifts local contrast on dark/foggy frames before detection (`--no-enhance` to skip). `VirtualTripwire` labels crossings `INBOUND` or `OUTBOUND` from the line cross product. `RiskScorer` assigns 0-100 (base 10, +40 inbound, +20 night 20:00-06:00 **IST**, +30 loiter >60s) so C2 can rank alerts. Each alert writes a timestamped full-frame + crop to `alert_snapshots/`, a row in `border_alerts.db`, and a SHA-256 hash-chained ledger block. Pass `--no-anpr` to skip OCR and `--no-face-capture` to skip mugshots. Verify evidence integrity with `python3 main.py --verify-ledger`.
