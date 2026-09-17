@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """BORDER SENTINEL operator dashboard.
 
-This first dashboard layer owns camera configuration and lightweight live-view
-capture. AI processing is deliberately controlled per camera so three live
-feeds can be displayed even when the Mac should process only selected feeds.
+Camera capture lives here. The perception controller consumes the newest
+captured frame, so live video and selected AI processing share one capture
+pipeline. AI is controlled independently for every camera.
+
 Face recognition uses one shared registry, while each camera decides whether
 its detections participate in that global matcher.
 """
-
 from __future__ import annotations
 
 import json
@@ -23,6 +23,7 @@ from flask import Flask, Response, jsonify, request, send_from_directory
 
 from cybersecurity.ledger_anchor import EvidenceLedger
 from face_intelligence import SharedFaceRegistry
+from dashboard_runtime import PerceptionController
 
 ROOT = Path(__file__).resolve().parent
 CONFIG_PATH = ROOT / "configs" / "cameras.json"
@@ -48,7 +49,11 @@ class CameraView:
         self.source = spec.get("source", "0")
         self.enabled = bool(spec.get("enabled", True))
         self._lock = threading.Lock()
-        self._frame: Optional[bytes] = None
+        self._frame: Optional[np.ndarray] = None
+        self._raw_jpeg: Optional[bytes] = None
+        self._processed_jpeg: Optional[bytes] = None
+        self._processed_sequence = -1
+        self._sequence = 0
         self._status = "STARTING"
         self._last_frame_at = 0.0
         self._stop = threading.Event()
@@ -95,7 +100,6 @@ class CameraView:
 
             ok, frame = cap.read()
             if not ok or frame is None:
-                # Local files are looped for dashboard demonstrations.
                 if isinstance(resolved, str) and Path(resolved).exists():
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                     time.sleep(0.03)
@@ -109,7 +113,9 @@ class CameraView:
             if not ok:
                 continue
             with self._lock:
-                self._frame = encoded.tobytes()
+                self._frame = frame
+                self._raw_jpeg = encoded.tobytes()
+                self._sequence += 1
                 self._last_frame_at = time.time()
                 self._status = "ONLINE"
 
@@ -118,7 +124,25 @@ class CameraView:
 
     def jpeg(self) -> Optional[bytes]:
         with self._lock:
-            return self._frame
+            return self._processed_jpeg if self._processed_sequence == self._sequence and self._processed_jpeg else self._raw_jpeg
+
+    def frame(self) -> tuple[Optional[np.ndarray], int]:
+        with self._lock:
+            if self._frame is None:
+                return None, self._sequence
+            return self._frame.copy(), self._sequence
+
+    def set_processed_frame(self, frame: Optional[np.ndarray]) -> None:
+        with self._lock:
+            if frame is None:
+                self._processed_jpeg = None
+                self._processed_sequence = -1
+                return
+            ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+            if not ok:
+                return
+            self._processed_jpeg = encoded.tobytes()
+            self._processed_sequence = self._sequence
 
     def status(self) -> dict:
         with self._lock:
@@ -129,6 +153,7 @@ class CameraView:
                 "enabled": self.enabled,
                 "status": self._status,
                 "last_frame_at": self._last_frame_at,
+                "sequence": self._sequence,
             }
 
     def set_source(self, source: Any) -> None:
@@ -157,6 +182,7 @@ FACE_REGISTRY = SharedFaceRegistry(
     threshold=float(face_registry_config.get("match_threshold", 0.45)),
 )
 LEDGER = EvidenceLedger(ROOT / "border_evidence_ledger.db")
+PERCEPTION = PerceptionController(CAMERAS, FACE_REGISTRY, LEDGER)
 
 
 @app.get("/")
@@ -174,8 +200,14 @@ def api_state():
         state = view.status()
         state["features"] = spec.get("features", {})
         state["ai_enabled"] = bool(spec.get("ai_enabled", False))
+        state["ai"] = PERCEPTION.state(cid)
         payload.append(state)
-    return jsonify({"cameras": payload, "face_recognition": FACE_REGISTRY.status(), "ledger": LEDGER.verify()})
+    return jsonify({
+        "cameras": payload,
+        "face_recognition": FACE_REGISTRY.status(),
+        "ledger": LEDGER.verify(),
+        "perception": PERCEPTION.global_state(),
+    })
 
 
 @app.get("/api/cameras/<camera_id>/stream")
@@ -185,13 +217,18 @@ def camera_stream(camera_id: str):
         return jsonify({"error": "camera not found"}), 404
 
     def generate():
+        last_payload = None
         while True:
             frame = view.jpeg()
             if frame is None:
                 time.sleep(0.1)
                 continue
+            if frame == last_payload:
+                time.sleep(0.03)
+                continue
+            last_payload = frame
             yield b"--frame\r\nContent-Type: image/jpeg\r\nCache-Control: no-cache\r\nPragma: no-cache\r\n\r\n" + frame + b"\r\n"
-            time.sleep(0.04)
+            time.sleep(0.03)
 
     return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
