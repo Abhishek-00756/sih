@@ -1,0 +1,4 @@
+# Optional shared face-recognition backend.
+# Kept separate from core requirements because the model/runtime is heavier.
+insightface>=0.7.3
+onnxruntime>=1.17.0
