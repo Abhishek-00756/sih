@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>BORDER SENTINEL C2</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="eyebrow">BORDER SURVEILLANCE / C2</div>
+      <h1>BORDER SENTINEL</h1>
+    </div>
+    <div class="system-state"><span id="systemDot" class="dot"></span><span id="systemText">CONNECTING</span></div>
+  </header>
+
+  <main>
+    <section class="section-head">
+      <div>
+        <div class="eyebrow">LIVE PERIMETER</div>
+        <h2>Camera feeds</h2>
+      </div>
+      <div id="clock" class="mono"></div>
+    </section>
+    <section id="cameraGrid" class="camera-grid"></section>
+
+    <section class="lower-grid">
+      <article class="panel">
+        <div class="panel-head"><h3>Face Intelligence</h3><span id="faceStatus" class="badge">CHECKING</span></div>
+        <p class="muted">One shared registry across all cameras. Enroll a person once; cameras with face intelligence enabled can match against the same registry.</p>
+        <form id="enrollForm" class="enroll-form">
+          <input id="personId" name="person_id" placeholder="Person ID" required>
+          <input id="displayName" name="display_name" placeholder="Display name" required>
+          <input id="faceImage" name="image" type="file" accept="image/*" required>
+          <button type="submit">Register Face</button>
+        </form>
+        <div id="peopleList" class="people-list"></div>
+      </article>
+
+      <article class="panel">
+        <div class="panel-head"><h3>Cybersecurity Ledger</h3><span id="ledgerStatus" class="badge">CHECKING</span></div>
+        <p class="muted">Incident metadata and evidence hashes are prepared for tamper-evident anchoring. The current adapter is a local SHA-256 chain; a permissioned blockchain adapter can be attached without changing the dashboard contract.</p>
+        <div class="ledger-box">
+          <div><span>Blocks</span><strong id="ledgerBlocks">—</strong></div>
+          <div><span>Head</span><code id="ledgerHead">—</code></div>
+        </div>
+      </article>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
