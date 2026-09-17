@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>BORDER SENTINEL · Mobile Camera</title>
+  <style>
+    :root{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#eef4f7;background:#070b0f}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at top,#14232e,#070b0f 55%);display:grid;place-items:center;padding:20px}
+    .card{width:min(680px,100%);border:1px solid #263742;background:#0d151b;border-radius:22px;overflow:hidden;box-shadow:0 24px 70px rgba(0,0,0,.4)}
+    header{padding:18px 20px;border-bottom:1px solid #24333d}.eyebrow{font:700 10px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.16em;color:#82929d}.title{font-size:21px;font-weight:800;letter-spacing:.06em;margin-top:5px}
+    .meta{padding:14px 20px;color:#97a6b0;font-size:13px;display:flex;justify-content:space-between;gap:12px}.status{font-weight:800;color:#8de1ac}
+    .preview{background:#000;aspect-ratio:4/3;display:grid;place-items:center}.preview video{width:100%;height:100%;object-fit:cover;display:block}
+    .body{padding:18px 20px 22px}.hint{color:#8c9ba5;font-size:12px;line-height:1.6}.actions{display:flex;gap:10px;margin-top:16px}.btn{border:1px solid #2d8c5b;background:#163b28;color:#e9f8ef;padding:11px 14px;border-radius:10px;font-weight:800;cursor:pointer}.btn.secondary{border-color:#33434d;background:#111a21;color:#bdc7cd}.btn:disabled{opacity:.5;cursor:not-allowed}.token{margin-top:14px;font:700 10px ui-monospace,SFMono-Regular,Menlo,monospace;color:#6f808b;word-break:break-all}
+  </style>
+</head>
+<body>
+  <section class="card">
+    <header><div class="eyebrow">BORDER SENTINEL / MOBILE PAIR</div><div class="title">MOBILE CAMERA</div></header>
+    <div class="meta"><span id="cameraLabel">CAMERA</span><span id="status" class="status">READY</span></div>
+    <div class="preview"><video id="preview" autoplay muted playsinline></video></div>
+    <div class="body">
+      <div class="hint">This phone becomes a live camera for the selected BORDER SENTINEL slot. Keep this page open while the feed is needed.</div>
+      <div class="actions"><button id="start" class="btn">Start Camera</button><button id="stop" class="btn secondary" disabled>Stop</button></div>
+      <div id="message" class="hint" style="margin-top:12px"></div>
+      <div class="token">PAIR TOKEN: <span id="token"></span></div>
+      <canvas id="canvas" hidden></canvas>
+    </div>
+  </section>
+<script>
+  const token = location.pathname.split('/').filter(Boolean).pop();
+  const preview = document.getElementById('preview');
+  const canvas = document.getElementById('canvas');
+  const start = document.getElementById('start');
+  const stop = document.getElementById('stop');
+  const status = document.getElementById('status');
+  const message = document.getElementById('message');
+  document.getElementById('token').textContent = token || '—';
+  let stream = null;
+  let timer = null;
+  let busy = false;
+
+  async function pairStatus(){
+    try{
+      const r=await fetch('/api/pairing/'+encodeURIComponent(token)+'/status',{cache:'no-store'});
+      const d=await r.json();
+      if(!r.ok) throw new Error(d.error||'Pairing expired');
+      document.getElementById('cameraLabel').textContent=d.camera_id+' · '+d.camera_name;
+    }catch(e){ status.textContent='EXPIRED'; message.textContent=e.message; }
+  }
+
+  async function sendFrame(){
+    if(!stream || busy) return;
+    busy=true;
+    const w=Math.min(720, preview.videoWidth||720);
+    const h=Math.round((preview.videoHeight||540)*(w/(preview.videoWidth||720)));
+    canvas.width=w; canvas.height=h;
+    canvas.getContext('2d').drawImage(preview,0,0,w,h);
+    canvas.toBlob(async blob=>{
+      try{
+        const r=await fetch('/api/pairing/'+encodeURIComponent(token)+'/frame',{method:'POST',headers:{'Content-Type':'image/jpeg'},body:blob});
+        if(!r.ok){const d=await r.json().catch(()=>({})); throw new Error(d.error||'Frame rejected');}
+        status.textContent='LIVE';
+      }catch(e){status.textContent='ERROR'; message.textContent=e.message;}
+      finally{busy=false;}
+    },'image/jpeg',0.62);
+  }
+
+  async function startCamera(){
+    try{
+      if(!token) throw new Error('Invalid pairing link');
+      await pairStatus();
+      stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:false});
+      preview.srcObject=stream;
+      await preview.play();
+      start.disabled=true; stop.disabled=false;
+      status.textContent='CONNECTING';
+      timer=setInterval(sendFrame,180);
+      message.textContent='Live camera is sending frames to BORDER SENTINEL.';
+    }catch(e){status.textContent='FAILED'; message.textContent=e.message+' Open this page over HTTPS and allow camera access.';}
+  }
+
+  function stopCamera(){
+    if(timer){clearInterval(timer);timer=null;}
+    if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
+    preview.srcObject=null; start.disabled=false; stop.disabled=true; status.textContent='STOPPED';
+    navigator.sendBeacon('/api/pairing/'+encodeURIComponent(token)+'/disconnect','');
+  }
+
+  start.onclick=startCamera; stop.onclick=stopCamera; pairStatus();
+  window.addEventListener('pagehide',()=>{if(stream){navigator.sendBeacon('/api/pairing/'+encodeURIComponent(token)+'/disconnect','');}});
+</script>
+</body>
+</html>
