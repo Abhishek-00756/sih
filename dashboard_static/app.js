@@ -286,7 +286,8 @@ function resetPairModal() {
   document.getElementById('copyPair').classList.add('hidden');
   document.getElementById('qrImage').src = '';
   document.getElementById('qrState').textContent = 'CREATE A PAIRING TO CONTINUE';
-  document.getElementById('pairHint').textContent = 'The QR link is short-lived. The phone and laptop must be on the same network.';
+  document.getElementById('pairHint').textContent = 'The QR link is short-lived. Keep phone and laptop on the same Wi‑Fi or phone hotspot.';
+  document.getElementById('pairUrl').textContent = '';
 }
 
 async function createPairing() {
@@ -310,6 +311,7 @@ async function createPairing() {
     document.getElementById('pairCameraLabel').textContent = `${data.camera_id} · ${data.camera_name}`;
     document.getElementById('pairFingerprint').textContent = `PAIR ${data.fingerprint}`;
     document.getElementById('pairExpiry').textContent = `EXPIRES ${new Date(data.expires_at * 1000).toLocaleTimeString()}`;
+    document.getElementById('pairUrl').textContent = data.pairing_url;
     document.getElementById('qrState').textContent = 'SCAN WITH PHONE';
     document.getElementById('pairHint').innerHTML = `Scan this QR with the phone. Both devices must be on the same Wi‑Fi or phone hotspot. On first use, the phone may show a local HTTPS certificate warning; continue to the page, then allow Camera.`;
     waitForPair(pairingToken);
