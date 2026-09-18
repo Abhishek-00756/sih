@@ -270,6 +270,7 @@ function openPairModal() {
   document.getElementById('pairModal').classList.remove('hidden');
   const select = document.getElementById('pairCamera');
   select.innerHTML = state.cameras.map(c => `<option value="${esc(c.camera_id)}">${esc(c.camera_id)} · ${esc(c.name)}</option>`).join('');
+  select.onchange = resetPairModal;
   const preferred = state.cameras.find(c => !c.enabled || c.status === 'DISABLED' || c.status === 'WAITING FOR PHONE');
   if (preferred) select.value = preferred.camera_id;
   resetPairModal();
@@ -295,12 +296,12 @@ async function createPairing() {
   document.getElementById('qrState').textContent = 'GENERATING QR…';
   try {
     const res = await fetch('/api/pairing/create', {
-      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({camera_id})
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({camera_id, client_host: window.location.hostname})
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Could not create pairing');
     state.pairing = data;
-    document.getElementById('qrImage').src = `/api/pairing/${encodeURIComponent(data.fingerprint ? data.pairing_url.split('/').pop() : '')}/qr.png`;
+    document.getElementById('qrImage').src = `/api/pairing/${encodeURIComponent(data.token)}/qr.png`;
     document.getElementById('qrImage').onerror = () => { document.getElementById('qrState').textContent = 'QR IMAGE FAILED — USE THE PAIRING LINK BELOW'; };
     document.getElementById('qrBox').classList.remove('hidden');
     document.getElementById('copyPair').classList.remove('hidden');
@@ -308,7 +309,7 @@ async function createPairing() {
     document.getElementById('pairFingerprint').textContent = `PAIR ${data.fingerprint}`;
     document.getElementById('pairExpiry').textContent = `EXPIRES ${new Date(data.expires_at * 1000).toLocaleTimeString()}`;
     document.getElementById('qrState').textContent = 'SCAN WITH PHONE';
-    document.getElementById('pairHint').innerHTML = `Open the QR link on the phone. Because the camera page uses HTTPS, the phone may show a certificate warning for this local development server. Continue to the page and allow camera access.`;
+    document.getElementById('pairHint').innerHTML = `Scan this QR with the phone. Both devices must be on the same Wi‑Fi or phone hotspot. On first use, the phone may show a local HTTPS certificate warning; continue to the page, then allow Camera.`;
     waitForPair(data.token || data.pairing_url.split('/').pop());
   } catch (err) {
     document.getElementById('qrState').textContent = 'PAIRING FAILED';
