@@ -304,6 +304,7 @@ def create_pairing():
         "camera_id": camera_id,
         "camera_name": spec.get("name", camera_id),
         "pairing_url": f"{dashboard_url}/pair/{session.token}",
+        "token": session.token,
         "expires_at": session.payload["expires_at"],
         "fingerprint": PAIRING.fingerprint(session.token),
     })
