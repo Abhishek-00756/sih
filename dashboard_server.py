@@ -55,11 +55,40 @@ def _save_config(config: dict) -> None:
 
 
 def _lan_ip(preferred_host: Optional[str] = None) -> str:
-    """Return the address another device should use for pairing."""
+    """Return the LAN address another device should use for pairing."""
     host = (preferred_host or "").strip()
     if host and host not in {"localhost", "127.0.0.1", "::1"}:
+        # Only trust an explicitly supplied non-local hostname/IP when it is
+        # what the browser used to reach the dashboard.
         return host
 
+    # macOS: resolve the interface used by the default route first. This
+    # avoids accidentally choosing an IP from an old VPN, college network,
+    # or secondary adapter while the phone is on a hotspot/Wi-Fi.
+    if Path("/sbin/route").exists() and Path("/usr/sbin/ipconfig").exists():
+        try:
+            route = subprocess.run(
+                ["/sbin/route", "-n", "get", "default"],
+                capture_output=True, text=True, timeout=1.0, check=False,
+            )
+            iface = None
+            for line in route.stdout.splitlines():
+                parts = line.strip().split()
+                if len(parts) >= 2 and parts[0] == "interface:":
+                    iface = parts[1]
+                    break
+            if iface:
+                result = subprocess.run(
+                    ["/usr/sbin/ipconfig", "getifaddr", iface],
+                    capture_output=True, text=True, timeout=1.0, check=False,
+                )
+                addr = result.stdout.strip()
+                if addr and not addr.startswith("127.") and ":" not in addr:
+                    return addr
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    # Fallback: inspect active macOS interfaces.
     if Path("/usr/sbin/ipconfig").exists():
         for iface in ("en0", "en1", "en2", "en3", "en4", "en5"):
             try:
@@ -68,7 +97,7 @@ def _lan_ip(preferred_host: Optional[str] = None) -> str:
                     capture_output=True, text=True, timeout=1.0, check=False,
                 )
                 addr = result.stdout.strip()
-                if addr and not addr.startswith("127."):
+                if addr and not addr.startswith("127.") and ":" not in addr:
                     return addr
             except (OSError, subprocess.SubprocessError):
                 pass
@@ -78,16 +107,8 @@ def _lan_ip(preferred_host: Optional[str] = None) -> str:
         sock.connect(("8.8.8.8", 80))
         addr = sock.getsockname()[0]
         sock.close()
-        if addr and not addr.startswith("127."):
+        if addr and not addr.startswith("127.") and ":" not in addr:
             return addr
-    except OSError:
-        pass
-
-    try:
-        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-            addr = info[4][0]
-            if addr and not addr.startswith("127."):
-                return addr
     except OSError:
         pass
     return "127.0.0.1"
@@ -265,6 +286,16 @@ def _force_https_on_http():
     if not request.is_secure and request.environ.get("SERVER_PORT") == str(HTTP_PORT):
         host = request.host.split(":", 1)[0]
         return redirect(f"https://{host}:{HTTPS_PORT}{request.full_path}", code=307)
+
+@app.get("/api/network")
+def api_network():
+    host = _lan_ip()
+    return jsonify({
+        "host": host,
+        "https_url": f"https://{host}:{HTTPS_PORT}" if host not in {"127.0.0.1", "localhost"} else None,
+        "http_url": f"http://{host}:{HTTP_PORT}" if host not in {"127.0.0.1", "localhost"} else None,
+        "qr_port": HTTPS_PORT,
+    })
 
 @app.get("/")
 def index() -> Response:
