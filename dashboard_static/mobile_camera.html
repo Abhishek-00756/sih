@@ -69,6 +69,12 @@
   async function startCamera(){
     try{
       if(!token) throw new Error('Invalid pairing link');
+      if(location.protocol !== 'https:' || !window.isSecureContext){
+        throw new Error('This camera page is not in a secure HTTPS context.');
+      }
+      if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+        throw new Error('Camera API unavailable in this browser context.');
+      }
       await pairStatus();
       stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:false});
       preview.srcObject=stream;
@@ -77,7 +83,11 @@
       status.textContent='CONNECTING';
       timer=setInterval(sendFrame,180);
       message.textContent='Live camera is sending frames to BORDER SENTINEL.';
-    }catch(e){status.textContent='FAILED'; message.textContent=e.message+' Open this page over HTTPS and allow camera access.';}
+    }catch(e){
+      status.textContent='FAILED';
+      const name = e && e.name ? ' ['+e.name+']' : '';
+      message.textContent = e.message + name + ' Check HTTPS and allow Camera for this site.';
+    }
   }
 
   function stopCamera(){
