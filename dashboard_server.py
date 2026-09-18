@@ -27,7 +27,7 @@ from typing import Any, Dict, Optional, Union
 import cv2
 import numpy as np
 import qrcode
-from flask import Flask, Response, jsonify, request, send_file, send_from_directory
+from flask import Flask, Response, jsonify, redirect, request, send_file, send_from_directory
 
 from cybersecurity.ledger_anchor import EvidenceLedger
 from dashboard_pairing import PairingManager
@@ -39,6 +39,8 @@ CONFIG_PATH = ROOT / "configs" / "cameras.json"
 LOGGER = logging.getLogger("border.dashboard")
 app = Flask(__name__, static_folder="dashboard_static", static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
+HTTPS_PORT = int(__import__("os").environ.get("BORDER_SENTINEL_HTTPS_PORT", "8080"))
+HTTP_PORT = int(__import__("os").environ.get("BORDER_SENTINEL_HTTP_PORT", "8081"))
 
 
 def _load_config() -> dict:
@@ -52,22 +54,18 @@ def _save_config(config: dict) -> None:
     tmp.replace(CONFIG_PATH)
 
 
-def _lan_ip() -> str:
-    """Best-effort LAN address used in QR URLs.
+def _lan_ip(preferred_host: Optional[str] = None) -> str:
+    """Return the address another device should use for pairing."""
+    host = (preferred_host or "").strip()
+    if host and host not in {"localhost", "127.0.0.1", "::1"}:
+        return host
 
-    On macOS, prefer the address reported by active network interfaces so a
-    phone hotspot address (for example 192.168.x.x) is not replaced by an
-    address from another connected network.
-    """
     if Path("/usr/sbin/ipconfig").exists():
         for iface in ("en0", "en1", "en2", "en3", "en4", "en5"):
             try:
                 result = subprocess.run(
                     ["/usr/sbin/ipconfig", "getifaddr", iface],
-                    capture_output=True,
-                    text=True,
-                    timeout=1.0,
-                    check=False,
+                    capture_output=True, text=True, timeout=1.0, check=False,
                 )
                 addr = result.stdout.strip()
                 if addr and not addr.startswith("127."):
@@ -75,22 +73,23 @@ def _lan_ip() -> str:
             except (OSError, subprocess.SubprocessError):
                 pass
 
-    candidates = []
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.connect(("8.8.8.8", 80))
-        candidates.append(sock.getsockname()[0])
+        addr = sock.getsockname()[0]
         sock.close()
-    except OSError:
-        pass
-    try:
-        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
-            candidates.append(info[4][0])
-    except OSError:
-        pass
-    for addr in candidates:
         if addr and not addr.startswith("127."):
             return addr
+    except OSError:
+        pass
+
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            addr = info[4][0]
+            if addr and not addr.startswith("127."):
+                return addr
+    except OSError:
+        pass
     return "127.0.0.1"
 
 
@@ -261,6 +260,12 @@ PERCEPTION = PerceptionController(CAMERAS, FACE_REGISTRY, LEDGER)
 PAIRING = PairingManager(ttl_seconds=300)
 
 
+@app.before_request
+def _force_https_on_http():
+    if not request.is_secure and request.environ.get("SERVER_PORT") == str(HTTP_PORT):
+        host = request.host.split(":", 1)[0]
+        return redirect(f"https://{host}:{HTTPS_PORT}{request.full_path}", code=307)
+
 @app.get("/")
 def index() -> Response:
     return send_from_directory(ROOT / "dashboard_static", "index.html")
@@ -281,7 +286,11 @@ def create_pairing():
     if camera_id not in CAMERAS:
         return jsonify({"error": "camera not found"}), 404
     scheme = "https"
-    dashboard_url = f"{scheme}://{_lan_ip()}:8080"
+    client_host = str(data.get("client_host", "")).strip()
+    host = _lan_ip(client_host)
+    if host in {"127.0.0.1", "localhost", "::1"}:
+        return jsonify({"error": "Open the dashboard using the LAN address shown in the terminal, then generate the QR again."}), 400
+    dashboard_url = f"{scheme}://{host}:{HTTPS_PORT}"
     session = PAIRING.create(camera_id, dashboard_url)
     config = _load_config()
     spec = config.setdefault("cameras", {}).get(camera_id, {})
@@ -519,10 +528,10 @@ def test_anchor():
 def _run_https():
     # Local development HTTPS so phone browsers can access camera APIs.
     # Port 8080 is used because some mobile hotspots isolate uncommon ports.
-    app.run(host="0.0.0.0", port=8080, threaded=True, debug=False, ssl_context="adhoc")
+    app.run(host="0.0.0.0", port=HTTPS_PORT, threaded=True, debug=False, ssl_context="adhoc")
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     threading.Thread(target=_run_https, name="https-dashboard", daemon=True).start()
-    app.run(host="0.0.0.0", port=8081, threaded=True, debug=False)
+    app.run(host="0.0.0.0", port=HTTP_PORT, threaded=True, debug=False)
