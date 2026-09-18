@@ -49,11 +49,11 @@ Start the dashboard with:
 python3 dashboard_server.py
 ```
 
-Then open `http://localhost:8080`. The dashboard provides live views, per-camera runtime controls, a shared face-enrollment registry, face-recognition backend status, local evidence-ledger verification, and QR onboarding for browser-based mobile cameras.
+The server prints the LAN address it is listening on. Open the dashboard at the HTTPS address (for example `https://192.168.x.x:8080`). If you open `http://localhost:8081`, it redirects to the same HTTPS dashboard automatically. The dashboard provides live views, per-camera runtime controls, a shared face-enrollment registry, face-recognition backend status, local evidence-ledger verification, and QR onboarding for browser-based mobile cameras.
 
 ### QR mobile-camera pairing
 
-Click **+ ADD CAMERA** in the dashboard and choose a camera slot. BORDER SENTINEL creates a short-lived QR pairing session and shows the QR code. Scan it with a phone on the same LAN/Wi-Fi; the phone opens a secure local camera page, grants browser camera permission, and sends JPEG frames to the paired camera slot.
+Click **+ ADD CAMERA** in the dashboard and choose a camera slot. BORDER SENTINEL creates a short-lived QR pairing session and shows the QR code. The QR uses the exact host name/IP that the dashboard is using, so there is no manual IP entry. Scan it with a phone on the same LAN/Wi-Fi; the phone opens a secure local camera page, grants browser camera permission, and sends JPEG frames to the paired camera slot.
 
 ```text
 Desktop dashboard
@@ -74,7 +74,7 @@ CAM-03 / selected slot
 Shared perception + dashboard
 ```
 
-The dashboard keeps HTTP on `8080` and also starts a local development HTTPS server on `8443` for the mobile camera page because browser camera APIs require a secure context. A development certificate warning may appear on the phone; continue to the local page and allow camera access. Pairing tokens expire after five minutes and should not be treated as permanent credentials.
+The dashboard uses HTTPS on `8080` for both the desktop dashboard and phone camera page. A small HTTP compatibility server runs on `8081` and redirects to HTTPS. This single-port design avoids common mobile-hotspot port-isolation problems and keeps QR links simple. A development certificate warning may appear on first use; continue to the local page and allow camera access. Pairing tokens expire after five minutes and should not be treated as permanent credentials.
 
 Install the QR dependency with:
 
