@@ -2,9 +2,9 @@
   "cameras": {
     "CAM-01": {
       "name": "Outpost Alpha",
-      "source": "videos/camera1.mp4",
-      "enabled": true,
-      "ai_enabled": true,
+      "source": "0",
+      "enabled": false,
+      "ai_enabled": false,
       "features": {
         "geofence": true,
         "tripwire": true,
@@ -15,9 +15,9 @@
     },
     "CAM-02": {
       "name": "Gate Bravo",
-      "source": "videos/camera2.mp4",
-      "enabled": true,
-      "ai_enabled": true,
+      "source": "0",
+      "enabled": false,
+      "ai_enabled": false,
       "features": {
         "geofence": true,
         "tripwire": false,
