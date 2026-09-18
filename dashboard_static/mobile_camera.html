@@ -86,7 +86,10 @@
     }catch(e){
       status.textContent='FAILED';
       const name = e && e.name ? ' ['+e.name+']' : '';
-      message.textContent = e.message + name + ' Check HTTPS and allow Camera for this site.';
+      let help = '';
+      if (e && e.name === 'NotAllowedError') help = ' On Chrome, open site settings for this address and set Camera to Allow, then reload this page.';
+      if (e && e.name === 'NotFoundError') help = ' No camera was found on this phone.';
+      message.textContent = e.message + name + help + ' Check HTTPS and allow Camera for this site.';
     }
   }
 
