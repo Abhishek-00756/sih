@@ -11,7 +11,8 @@
         "anpr": false,
         "face_recognition": true,
         "enhancement": true
-      }
+      },
+      "tripwires": []
     },
     "CAM-02": {
       "name": "Gate Bravo",
@@ -24,7 +25,8 @@
         "anpr": true,
         "face_recognition": false,
         "enhancement": false
-      }
+      },
+      "tripwires": []
     },
     "CAM-03": {
       "name": "Sector Charlie",
@@ -37,7 +39,8 @@
         "anpr": false,
         "face_recognition": false,
         "enhancement": false
-      }
+      },
+      "tripwires": []
     }
   },
   "shared_face_recognition": {
