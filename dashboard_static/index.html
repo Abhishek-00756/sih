@@ -55,10 +55,10 @@
   <div id="pairModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="pairTitle">
     <div class="modal-card">
       <div class="panel-head"><div><div class="eyebrow">MOBILE CAMERA ONBOARDING</div><h3 id="pairTitle">Add Camera</h3></div><button id="closePair" class="icon-btn" aria-label="Close">×</button></div>
-      <p class="muted">Select a camera slot. The QR code opens a secure local pairing page on the phone. Keep the phone and laptop on the same network.</p>
+      <p class="muted">Choose the camera slot, generate the QR, and scan it with the phone. The QR automatically uses the address of this dashboard, so you do not need to type an IP address. Keep the phone and laptop on the same Wi‑Fi or phone hotspot.</p>
       <label class="field-label" for="pairCamera">Camera slot</label>
       <select id="pairCamera" class="pair-select"></select>
-      <div id="qrState" class="qr-state">CREATE A PAIRING TO CONTINUE</div>
+      <div id="qrState" class="qr-state">CREATE A PAIRING TO CONTINUE</div><div id="pairAddress" class="pair-address"></div>
       <div id="qrBox" class="qr-box hidden"><img id="qrImage" alt="Mobile camera pairing QR code"><div class="qr-meta"><strong id="pairCameraLabel">CAM-03</strong><span id="pairFingerprint"></span><span id="pairExpiry"></span></div></div>
       <div class="pair-actions"><button id="createPair" class="primary-btn">Generate QR</button><button id="copyPair" class="secondary-btn hidden">Copy Pairing Link</button></div>
       <div id="pairHint" class="muted" style="margin-top:12px"></div>
