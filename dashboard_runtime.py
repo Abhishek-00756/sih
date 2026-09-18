@@ -44,8 +44,9 @@ class PerceptionController:
                               "last_event": None} for cid in cameras}
         self._zones_mtime = -1.0
         self._zones: Dict[str, list] = {}
-        self._tripwires_mtime = -1.0
+        self._tripwires_signature = None
         self._tripwires: Dict[str, list] = {}
+        self._tripwire_manager_meta: Dict[str, tuple] = {}
         self.thread = threading.Thread(target=self._run, name="perception-controller", daemon=True)
         self.thread.start()
 
@@ -93,20 +94,43 @@ class PerceptionController:
 
     def _load_tripwires(self) -> None:
         try:
-            mtime = self.perception_path.stat().st_mtime
+            camera_mtime = self.config_path.stat().st_mtime
         except FileNotFoundError:
-            self._tripwires = {}
+            camera_mtime = -1.0
+        try:
+            perception_mtime = self.perception_path.stat().st_mtime
+        except FileNotFoundError:
+            perception_mtime = -1.0
+        signature = (camera_mtime, perception_mtime)
+        if signature == self._tripwires_signature:
             return
-        if mtime == self._tripwires_mtime:
-            return
+
         cfg = self._perception_cfg()
+        camera_specs = self._camera_specs()
         grouped: Dict[str, list] = {}
+
+        # Dashboard camera config takes precedence when a camera has a
+        # tripwires key. This lets the operator draw a line from the UI.
+        for camera_id, spec in camera_specs.items():
+            if "tripwires" in spec:
+                items = spec.get("tripwires") or []
+                grouped[str(camera_id)] = [
+                    item for item in items
+                    if isinstance(item, dict) and item.get("pt1") and item.get("pt2")
+                ]
+
+        # Preserve the legacy YAML tripwire for cameras that do not use
+        # dashboard-managed tripwires.
         for item in cfg.get("tripwires") or []:
             if isinstance(item, dict) and item.get("camera_id") and item.get("pt1") and item.get("pt2"):
-                grouped.setdefault(str(item["camera_id"]), []).append(item)
+                key = str(item["camera_id"])
+                if key not in grouped:
+                    grouped.setdefault(key, []).append(item)
+
         self._tripwires = grouped
-        self._tripwires_mtime = mtime
+        self._tripwires_signature = signature
         self.geofence_managers.clear()
+        self._tripwire_manager_meta.clear()
 
     def _ensure_detector(self, camera_id: str) -> Any:
         detector = self.detectors.get(camera_id)
@@ -136,19 +160,53 @@ class PerceptionController:
         return self.enhancer
 
     def _ensure_tripwire_manager(self, camera_id: str) -> Optional[GeofenceManager]:
-        if camera_id in self.geofence_managers:
-            return self.geofence_managers[camera_id]
         self._load_tripwires()
+        view = self.cameras.get(camera_id)
+        frame, _ = view.frame() if view is not None else (None, -1)
+        shape = (int(frame.shape[1]), int(frame.shape[0])) if frame is not None else (1280, 720)
+        meta = (shape, self._tripwires_signature)
+        if camera_id in self.geofence_managers and self._tripwire_manager_meta.get(camera_id) == meta:
+            return self.geofence_managers[camera_id]
+
         cfg = self._perception_cfg()
         camera_key = str(cfg.get("geofence_camera_map", {}).get(camera_id, camera_id))
-        items = self._tripwires.get(camera_key) or self._tripwires.get(camera_id) or []
-        wires = [VirtualTripwire(item["pt1"], item["pt2"], wire_id=str(item.get("id", "border")),
-                                 camera_id=camera_key, cooldown_seconds=float(item.get("cooldown_seconds", cfg.get("geofence_cooldown", 60.0))),
-                                 inbound_positive=bool(item.get("inbound_positive", True))) for item in items]
+        items = self._tripwires.get(camera_id)
+        if items is None:
+            items = self._tripwires.get(camera_key) or []
+
+        wires = []
+        for item in items:
+            p1 = item["pt1"]
+            p2 = item["pt2"]
+            if bool(item.get("normalized", False)):
+                p1 = [
+                    float(p1[0]) * max(shape[0] - 1, 1),
+                    float(p1[1]) * max(shape[1] - 1, 1),
+                ]
+                p2 = [
+                    float(p2[0]) * max(shape[0] - 1, 1),
+                    float(p2[1]) * max(shape[1] - 1, 1),
+                ]
+            wires.append(VirtualTripwire(
+                p1, p2,
+                wire_id=str(item.get("id", "border")),
+                camera_id=camera_id,
+                cooldown_seconds=float(item.get("cooldown_seconds", cfg.get("geofence_cooldown", 60.0))),
+                inbound_positive=bool(item.get("inbound_positive", True)),
+            ))
         if not wires:
+            self.geofence_managers.pop(camera_id, None)
+            self._tripwire_manager_meta.pop(camera_id, None)
             return None
-        mgr = GeofenceManager(zone_points=[(0,0),(1,0),(1,1),(0,1)], cooldown_seconds=float(cfg.get("geofence_cooldown",60.0)), tripwires=wires, logger=None)
+
+        mgr = GeofenceManager(
+            zone_points=[(0,0),(1,0),(1,1),(0,1)],
+            cooldown_seconds=float(cfg.get("geofence_cooldown",60.0)),
+            tripwires=wires,
+            logger=None,
+        )
         self.geofence_managers[camera_id] = mgr
+        self._tripwire_manager_meta[camera_id] = meta
         return mgr
 
     def _match_face(self, crop: np.ndarray) -> Optional[dict]:
@@ -256,6 +314,9 @@ class PerceptionController:
         persons = vehicles = face_matches = 0
         gids, plates = set(), []
         tripwire = self._ensure_tripwire_manager(camera_id) if features.get("tripwire", False) else None
+        if tripwire is not None:
+            for wire in tripwire.tripwires:
+                wire.draw(work, color=(0, 210, 255), thickness=2)
         extractor = self._ensure_extractor()
         now = time.time()
         if results and results[0].boxes is not None and results[0].boxes.id is not None:
