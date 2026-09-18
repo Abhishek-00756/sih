@@ -18,6 +18,7 @@ import io
 import json
 import logging
 import socket
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -52,7 +53,28 @@ def _save_config(config: dict) -> None:
 
 
 def _lan_ip() -> str:
-    """Best-effort LAN address used in QR URLs; never falls back to localhost."""
+    """Best-effort LAN address used in QR URLs.
+
+    On macOS, prefer the address reported by active network interfaces so a
+    phone hotspot address (for example 192.168.x.x) is not replaced by an
+    address from another connected network.
+    """
+    if Path("/usr/sbin/ipconfig").exists():
+        for iface in ("en0", "en1", "en2", "en3", "en4", "en5"):
+            try:
+                result = subprocess.run(
+                    ["/usr/sbin/ipconfig", "getifaddr", iface],
+                    capture_output=True,
+                    text=True,
+                    timeout=1.0,
+                    check=False,
+                )
+                addr = result.stdout.strip()
+                if addr and not addr.startswith("127."):
+                    return addr
+            except (OSError, subprocess.SubprocessError):
+                pass
+
     candidates = []
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -70,6 +92,7 @@ def _lan_ip() -> str:
         if addr and not addr.startswith("127."):
             return addr
     return "127.0.0.1"
+
 
 
 class CameraView:
