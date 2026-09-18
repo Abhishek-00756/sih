@@ -258,7 +258,7 @@ def create_pairing():
     if camera_id not in CAMERAS:
         return jsonify({"error": "camera not found"}), 404
     scheme = "https"
-    dashboard_url = f"{scheme}://{_lan_ip()}:8443"
+    dashboard_url = f"{scheme}://{_lan_ip()}:8080"
     session = PAIRING.create(camera_id, dashboard_url)
     config = _load_config()
     spec = config.setdefault("cameras", {}).get(camera_id, {})
@@ -495,10 +495,11 @@ def test_anchor():
 
 def _run_https():
     # Local development HTTPS so phone browsers can access camera APIs.
-    app.run(host="0.0.0.0", port=8443, threaded=True, debug=False, ssl_context="adhoc")
+    # Port 8080 is used because some mobile hotspots isolate uncommon ports.
+    app.run(host="0.0.0.0", port=8080, threaded=True, debug=False, ssl_context="adhoc")
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     threading.Thread(target=_run_https, name="https-dashboard", daemon=True).start()
-    app.run(host="0.0.0.0", port=8080, threaded=True, debug=False)
+    app.run(host="0.0.0.0", port=8081, threaded=True, debug=False)
