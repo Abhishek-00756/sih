@@ -343,6 +343,7 @@ def api_state():
         state["features"] = spec.get("features", {})
         state["ai_enabled"] = bool(spec.get("ai_enabled", False))
         state["ai"] = PERCEPTION.state(cid)
+        state["tripwires"] = spec.get("tripwires") or []
         payload.append(state)
     return jsonify({
         "cameras": payload,
@@ -370,6 +371,62 @@ def camera_stream(camera_id: str):
             yield b"--frame\r\nContent-Type: image/jpeg\r\nCache-Control: no-cache\r\nPragma: no-cache\r\n\r\n" + frame + b"\r\n"
 
     return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame")
+
+
+@app.get("/api/cameras/<camera_id>/tripwire")
+def get_tripwire(camera_id: str):
+    config = _load_config()
+    spec = (config.get("cameras") or {}).get(camera_id)
+    if spec is None:
+        return jsonify({"error": "camera not found"}), 404
+    return jsonify({"camera_id": camera_id, "tripwires": spec.get("tripwires") or []})
+
+
+@app.post("/api/cameras/<camera_id>/tripwire")
+def save_tripwire(camera_id: str):
+    data = request.get_json(silent=True) or {}
+    pt1 = data.get("pt1")
+    pt2 = data.get("pt2")
+    if not isinstance(pt1, (list, tuple)) or not isinstance(pt2, (list, tuple)) or len(pt1) != 2 or len(pt2) != 2:
+        return jsonify({"error": "pt1 and pt2 must each contain [x, y]"}), 400
+    try:
+        p1 = [float(pt1[0]), float(pt1[1])]
+        p2 = [float(pt2[0]), float(pt2[1])]
+    except (TypeError, ValueError):
+        return jsonify({"error": "tripwire points must be numeric"}), 400
+    if any(v < 0.0 or v > 1.0 for v in p1 + p2):
+        return jsonify({"error": "tripwire points must be normalized between 0 and 1"}), 400
+    if p1 == p2:
+        return jsonify({"error": "tripwire endpoints must be different"}), 400
+
+    config = _load_config()
+    spec = (config.get("cameras") or {}).get(camera_id)
+    if spec is None:
+        return jsonify({"error": "camera not found"}), 404
+    wire = {
+        "id": str(data.get("id", "primary")),
+        "pt1": p1,
+        "pt2": p2,
+        "normalized": True,
+        "inbound_positive": bool(data.get("inbound_positive", True)),
+        "cooldown_seconds": float(data.get("cooldown_seconds", 60.0)),
+    }
+    wires = [w for w in (spec.get("tripwires") or []) if str(w.get("id", "")) != wire["id"]]
+    wires.append(wire)
+    spec["tripwires"] = wires
+    _save_config(config)
+    return jsonify({"ok": True, "camera_id": camera_id, "tripwires": wires})
+
+
+@app.delete("/api/cameras/<camera_id>/tripwire")
+def clear_tripwire(camera_id: str):
+    config = _load_config()
+    spec = (config.get("cameras") or {}).get(camera_id)
+    if spec is None:
+        return jsonify({"error": "camera not found"}), 404
+    spec["tripwires"] = []
+    _save_config(config)
+    return jsonify({"ok": True, "camera_id": camera_id, "tripwires": []})
 
 
 @app.post("/api/cameras/<camera_id>/settings")
