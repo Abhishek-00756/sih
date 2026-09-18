@@ -301,7 +301,9 @@ async function createPairing() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Could not create pairing');
     state.pairing = data;
-    document.getElementById('qrImage').src = `/api/pairing/${encodeURIComponent(data.token)}/qr.png`;
+    const pairingToken = data.token || data.pairing_url.split('/').pop();
+    state.pairing.token = pairingToken;
+    document.getElementById('qrImage').src = `/api/pairing/${encodeURIComponent(pairingToken)}/qr.png`;
     document.getElementById('qrImage').onerror = () => { document.getElementById('qrState').textContent = 'QR IMAGE FAILED — USE THE PAIRING LINK BELOW'; };
     document.getElementById('qrBox').classList.remove('hidden');
     document.getElementById('copyPair').classList.remove('hidden');
@@ -310,7 +312,7 @@ async function createPairing() {
     document.getElementById('pairExpiry').textContent = `EXPIRES ${new Date(data.expires_at * 1000).toLocaleTimeString()}`;
     document.getElementById('qrState').textContent = 'SCAN WITH PHONE';
     document.getElementById('pairHint').innerHTML = `Scan this QR with the phone. Both devices must be on the same Wi‑Fi or phone hotspot. On first use, the phone may show a local HTTPS certificate warning; continue to the page, then allow Camera.`;
-    waitForPair(data.token || data.pairing_url.split('/').pop());
+    waitForPair(pairingToken);
   } catch (err) {
     document.getElementById('qrState').textContent = 'PAIRING FAILED';
     document.getElementById('pairHint').textContent = err.message;
