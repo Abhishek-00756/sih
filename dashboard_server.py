@@ -450,6 +450,7 @@ def api_state():
         "face_recognition": FACE_REGISTRY.status(),
         "ledger": LEDGER.verify(),
         "security_ledger": PERCEPTION.alert_logger.verify_ledger(),
+        "blockchain": PERCEPTION.alert_logger.blockchain_status(),
         "perception": PERCEPTION.global_state(),
     })
 
