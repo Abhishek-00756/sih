@@ -23,6 +23,11 @@ class PerceptionController:
         self.cameras = cameras
         self.face_registry = face_registry
         self.ledger = ledger
+        alert_cfg = self._perception_cfg()
+        self.alert_logger = AlertLogger(
+            db_path=ROOT / str(alert_cfg.get("alert_db", "border_alerts.db")),
+            snapshot_dir=ROOT / str(alert_cfg.get("snapshot_dir", "alert_snapshots")),
+        )
         self.config_path = ROOT / "configs" / "cameras.json"
         self.perception_path = ROOT / "configs" / "perception.yaml"
         self.zones_path = ROOT / "configs" / "zones.json"
@@ -203,7 +208,7 @@ class PerceptionController:
             zone_points=[(0,0),(1,0),(1,1),(0,1)],
             cooldown_seconds=float(cfg.get("geofence_cooldown",60.0)),
             tripwires=wires,
-            logger=None,
+            logger=self.alert_logger,
         )
         self.geofence_managers[camera_id] = mgr
         self._tripwire_manager_meta[camera_id] = meta
@@ -272,11 +277,17 @@ class PerceptionController:
                    "timestamp":now, "bbox":[x1,y1,x2,y2], "footprint":[(x1+x2)//2,y2]}
         self.metrics[camera_id]["last_event"] = details
         try:
-            cfg = self._perception_cfg()
-            logger = AlertLogger(db_path=ROOT / str(cfg.get("alert_db","border_alerts.db")), snapshot_dir=ROOT / str(cfg.get("snapshot_dir","alert_snapshots")))
-            logger.log_intrusion(camera_id=camera_id, global_id=gid, frame=frame, bbox=bbox, timestamp=now,
-                                 alert_type="GEOFENCE_ENTER", zone_id=str(zone.get("zone_id","")), zone_name=str(zone.get("name","")),
-                                 footprint=((x1+x2)//2,y2))
+            self.alert_logger.log_intrusion(
+                camera_id=camera_id,
+                global_id=gid,
+                frame=frame,
+                bbox=bbox,
+                timestamp=now,
+                alert_type="GEOFENCE_ENTER",
+                zone_id=str(zone.get("zone_id","")),
+                zone_name=str(zone.get("name","")),
+                footprint=((x1+x2)//2,y2),
+            )
         except Exception as exc:
             LOGGER.exception("Evidence log failed: %s", exc)
         try:
@@ -344,8 +355,39 @@ class PerceptionController:
                             label += f" | {face['display_name']} {face['confidence']:.0%}"
                     self._check_zones(frame, camera_id, gid, bbox, now)
                     if tripwire is not None:
-                        try: tripwire.check_tripwire(work, bbox, gid, camera_id=camera_id, timestamp=now, source_camera_id=camera_id)
-                        except Exception as exc: LOGGER.debug("Tripwire failed: %s", exc)
+                        try:
+                            tripwire.check_tripwire(
+                                work,
+                                bbox,
+                                gid,
+                                camera_id=camera_id,
+                                timestamp=now,
+                                source_camera_id=camera_id,
+                            )
+                            for alert in tripwire.pop_alerts():
+                                details = {
+                                    "event": "TRIPWIRE_CROSSING",
+                                    "camera_id": camera_id,
+                                    "global_id": int(alert.global_id),
+                                    "wire_id": alert.wire_id,
+                                    "direction": alert.direction,
+                                    "timestamp": float(alert.timestamp),
+                                    "previous": list(alert.previous),
+                                    "footprint": list(alert.footprint),
+                                    "bbox": list(alert.bbox),
+                                    "cybersecurity": {
+                                        "evidence_db": "border_alerts.db",
+                                        "tamper_evident_chain": "security_ledger",
+                                        "metadata_anchor": "border_evidence_ledger.db",
+                                    },
+                                }
+                                self.metrics[camera_id]["last_event"] = details
+                                try:
+                                    self.ledger.anchor(details)
+                                except Exception as exc:
+                                    LOGGER.debug("Tripwire metadata ledger anchor failed: %s", exc)
+                        except Exception as exc:
+                            LOGGER.debug("Tripwire failed: %s", exc)
                     color=(60,220,130)
                 else:
                     vehicles += 1; label=f"{COCO_CLASSES.get(int(cls_id),'Vehicle')} V-{int(local_id)}"; color=(40,180,240)
@@ -384,9 +426,17 @@ class PerceptionController:
         return metric
 
     def global_state(self) -> dict:
-        return {"running":self.thread.is_alive(), "uptime":max(0.0,time.time()-self.started_at),
-                "last_error":self.last_error, "osnet":None if self.extractor is None else (not self.extractor.use_fallback),
-                "gallery":self.gallery.active_count()}
+        evidence_ledger = self.alert_logger.verify_ledger()
+        dashboard_ledger = self.ledger.verify()
+        return {
+            "running": self.thread.is_alive(),
+            "uptime": max(0.0, time.time() - self.started_at),
+            "last_error": self.last_error,
+            "osnet": None if self.extractor is None else (not self.extractor.use_fallback),
+            "gallery": self.gallery.active_count(),
+            "evidence_ledger": evidence_ledger,
+            "metadata_ledger": dashboard_ledger,
+        }
 
     def stop(self) -> None:
         self.stop_event.set(); self.thread.join(timeout=2.0)
