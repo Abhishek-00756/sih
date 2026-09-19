@@ -187,3 +187,6 @@ face_database/
 *.lz
 *.lzma
 *.iso
+
+# Fabric local build output
+blockchain/chaincode/evidence-contract/bin/
