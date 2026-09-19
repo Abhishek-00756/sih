@@ -396,6 +396,42 @@ def pairing_disconnect(token: str):
     return jsonify({"ok": True})
 
 
+@app.get("/api/alerts/recent")
+def api_alerts_recent():
+    try:
+        limit = max(1, min(100, int(request.args.get("limit", "25"))))
+    except (TypeError, ValueError):
+        limit = 25
+    return jsonify({
+        "alerts": PERCEPTION.alert_logger.recent(limit=limit),
+        "stats": PERCEPTION.alert_logger.stats(),
+    })
+
+
+@app.get("/api/alerts/<int:alert_id>/snapshot")
+def api_alert_snapshot(alert_id: int):
+    alert = PERCEPTION.alert_logger.get(alert_id)
+    if alert is None:
+        return jsonify({"error": "alert not found"}), 404
+    path = Path(str(alert.get("snapshot_path", ""))).resolve()
+    root = Path(PERCEPTION.alert_logger.snapshot_dir).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return jsonify({"error": "evidence path is outside the configured snapshot directory"}), 403
+    if not path.is_file():
+        return jsonify({"error": "evidence snapshot missing"}), 404
+    return send_file(path, mimetype="image/jpeg", max_age=0)
+
+
+@app.get("/api/security/status")
+def api_security_status():
+    return jsonify({
+        "evidence_ledger": PERCEPTION.alert_logger.verify_ledger(),
+        "metadata_ledger": LEDGER.verify(),
+    })
+
+
 @app.get("/api/state")
 def api_state():
     config = _load_config()
@@ -413,6 +449,7 @@ def api_state():
         "cameras": payload,
         "face_recognition": FACE_REGISTRY.status(),
         "ledger": LEDGER.verify(),
+        "security_ledger": PERCEPTION.alert_logger.verify_ledger(),
         "perception": PERCEPTION.global_state(),
     })
 
