@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 
-TXID_RE = re.compile(r"txid \\[([0-9a-fA-F]{64})\\]")
+TXID_RE = re.compile(r"txid \[([0-9a-fA-F]{64})\]")
 
 
 class FabricEvidenceClient:
