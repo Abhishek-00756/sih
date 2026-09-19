@@ -165,3 +165,19 @@ This standalone `geofence/` package provides geometry, zone state, confirmation,
 * Ground-contact is the **bottom-center of the bounding box** `((x1+x2)/2, y2)`. That is an approximation of where a person/vehicle meets the ground, not a true 3D foot position.
 * All geometry is in **image/pixel coordinates**. Pixels are not meters and are not GPS.
 * Homography can be added later as an optional mapping layer. It is **not** required by the MVP.
+## Blockchain evidence anchoring
+
+BORDER SENTINEL records every geofence/tripwire intrusion in the local evidence database and tamper-evident SHA-256 chain. It also asynchronously submits the evidence SHA-256 plus incident metadata to the deployed Hyperledger Fabric evidence chaincode on evidencechannel.
+
+For the local Fabric development network:
+
+```bash
+export FABRIC_TEST_NETWORK=~/fabric-samples/test-network
+export FABRIC_CHANNEL=evidencechannel
+export FABRIC_CHAINCODE=evidence
+export BORDER_SENTINEL_BLOCKCHAIN_ENABLED=true
+```
+
+The Python runtime invokes the Fabric peer CLI with Org1 and Org2 endorsement and --waitForEvent, then stores the Fabric transaction ID and anchoring status back into border_alerts.db and each incident meta.json.
+
+The image itself stays off-chain. Its SHA-256 fingerprint is what is recorded on Fabric so the evidence can later be independently verified.
