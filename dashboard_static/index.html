@@ -28,7 +28,7 @@
     </section>
     <section id="cameraGrid" class="camera-grid"></section>
 
-    <section class="lower-grid">
+    <section class="lower-grid lower-grid-3">
       <article class="panel">
         <div class="panel-head"><h3>Face Intelligence</h3><span id="faceStatus" class="badge">CHECKING</span></div>
         <p class="muted">One shared registry across all cameras. Enroll a person once; cameras with face intelligence enabled can match against the same registry.</p>
@@ -43,11 +43,18 @@
 
       <article class="panel">
         <div class="panel-head"><h3>Cybersecurity Ledger</h3><span id="ledgerStatus" class="badge">CHECKING</span></div>
-        <p class="muted">Incident metadata and evidence hashes are prepared for tamper-evident anchoring. The current adapter is a local SHA-256 chain; a permissioned blockchain adapter can be attached without changing the dashboard contract.</p>
+        <p class="muted">Each intrusion saves evidence in SQLite, hashes the image, and appends a tamper-evident hash-chain record. A second metadata chain is maintained by the dashboard. This is blockchain-ready local anchoring, not a decentralized blockchain.</p>
         <div class="ledger-box">
-          <div><span>Blocks</span><strong id="ledgerBlocks">—</strong></div>
-          <div><span>Head</span><code id="ledgerHead">—</code></div>
+          <div><span>Metadata blocks</span><strong id="ledgerBlocks">—</strong></div>
+          <div><span>Evidence blocks</span><strong id="evidenceLedgerBlocks">—</strong></div>
+          <div><span>Metadata head</span><code id="ledgerHead">—</code></div>
+          <div><span>Evidence chain</span><code id="evidenceLedgerState">—</code></div>
         </div>
+      </article>
+
+      <article class="panel alert-panel">
+        <div class="panel-head"><h3>Live Intrusions</h3><span id="alertCount" class="badge">0</span></div>
+        <div id="alertList" class="alert-list"><div class="muted">No intrusion events recorded yet.</div></div>
       </article>
     </section>
   </main>
