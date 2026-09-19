@@ -16,7 +16,7 @@ async function loadState() {
     state.cameras = data.cameras || [];
     if (!state.editingTripwire) renderCameras(state.cameras);
     renderFace(data.face_recognition || {});
-    renderLedger(data.ledger || {}, data.security_ledger || {});
+    renderLedger(data.ledger || {}, data.security_ledger || {}, data.blockchain || {});
     await loadAlerts();
     const online = state.cameras.filter(c => c.enabled && c.status === 'ONLINE').length;
     const total = state.cameras.length;
@@ -260,9 +260,10 @@ function renderFace(face) {
     .catch(console.error);
 }
 
-function renderLedger(metadataLedger, evidenceLedger) {
+function renderLedger(metadataLedger, evidenceLedger, blockchain) {
   const metadataOk = metadataLedger.valid === true;
   const evidenceOk = evidenceLedger.ok === true;
+  const fabricReady = blockchain.status === 'READY' || blockchain.status === 'ANCHORED';
   const ok = metadataOk && evidenceOk;
   const badge = document.getElementById('ledgerStatus');
   badge.textContent = ok ? 'CHAINS VALID' : 'CHECK SECURITY';
@@ -271,6 +272,11 @@ function renderLedger(metadataLedger, evidenceLedger) {
   document.getElementById('evidenceLedgerBlocks').textContent = evidenceLedger.blocks ?? '0';
   document.getElementById('ledgerHead').textContent = metadataLedger.head_hash ? metadataLedger.head_hash.slice(0, 24) + '…' : '—';
   document.getElementById('evidenceLedgerState').textContent = evidenceOk ? 'INTACT' : 'TAMPER CHECK';
+  const fabricStatus = document.getElementById('fabricStatus');
+  fabricStatus.textContent = blockchain.status || '—';
+  fabricStatus.style.color = fabricReady ? '#8de1ac' : '#e1bd6d';
+  const fabricTx = document.getElementById('fabricTx');
+  fabricTx.textContent = blockchain.transaction_id ? blockchain.transaction_id.slice(0, 24) + '…' : '—';
 }
 
 function formatAlertTime(value) {
@@ -305,7 +311,7 @@ function renderAlerts(alerts) {
       <div class="alert-main">
         <strong>${esc(a.alert_type)}</strong>
         <span>${esc(a.camera_id)} · GID ${esc(a.global_id)}${direction}</span>
-        <small>${esc(formatAlertTime(a.unix_time))} ${risk}</small>
+        <small>${esc(formatAlertTime(a.unix_time))} ${risk} · FABRIC ${esc(a.blockchain_status || 'PENDING')}</small>
       </div>
       <a class="alert-evidence" href="/api/alerts/${encodeURIComponent(a.id)}/snapshot" target="_blank" rel="noopener">VIEW EVIDENCE</a>
     </div>`;
