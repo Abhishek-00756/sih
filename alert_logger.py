@@ -14,11 +14,14 @@ import json
 import logging
 import sqlite3
 import threading
+import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 from risk_scorer import RiskScorer
+from blockchain.fabric_client import FabricEvidenceClient
 
 import cv2
 import numpy as np
@@ -53,6 +56,7 @@ class AlertLogger:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self.scorer = RiskScorer()
+        self.blockchain = FabricEvidenceClient()
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
@@ -92,6 +96,11 @@ class AlertLogger:
                 ("risk_score", "INTEGER"),
                 ("risk_label", "TEXT"),
                 ("risk_factors", "TEXT"),
+                ("event_id", "TEXT"),
+                ("blockchain_status", "TEXT"),
+                ("blockchain_tx_id", "TEXT"),
+                ("blockchain_error", "TEXT"),
+                ("blockchain_anchored_at", "REAL"),
             ):
                 if col not in cols:
                     conn.execute(f"ALTER TABLE security_alerts ADD COLUMN {col} {decl}")
@@ -103,6 +112,12 @@ class AlertLogger:
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_alerts_time ON security_alerts(unix_time)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_alerts_event_id ON security_alerts(event_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_alerts_blockchain_tx ON security_alerts(blockchain_tx_id)"
             )
             conn.execute(
                 """
@@ -240,6 +255,7 @@ class AlertLogger:
         incident_dir = self._incident_dir(camera_id, gid, now)
         filepath = incident_dir / "full.jpg"
         crop_path: Optional[Path] = None
+        event_id = f"INC-{now.strftime('%Y%m%d%H%M%S')}-{_safe_token(camera_id)}-{uuid.uuid4().hex[:12].upper()}"
 
         risk_score, risk_factors = self.scorer.score(
             event_type=alert_type,
@@ -294,6 +310,11 @@ class AlertLogger:
                 "risk_score": risk_score,
                 "risk_label": risk_label,
                 "risk_factors": risk_factors,
+                "event_id": event_id,
+                "blockchain_status": "PENDING",
+                "blockchain_tx_id": None,
+                "blockchain_error": None,
+                "blockchain_anchored_at": None,
             }
             (incident_dir / "meta.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
             conn.execute(
@@ -301,9 +322,10 @@ class AlertLogger:
                 INSERT INTO security_alerts (
                     timestamp, unix_time, camera_id, global_id, alert_type,
                     zone_id, zone_name, bbox, footprint, snapshot_path, crop_path, incident_dir,
-                    image_hash, previous_hash, block_hash, direction, risk_score, risk_label, risk_factors
+                    image_hash, previous_hash, block_hash, direction, risk_score, risk_label, risk_factors,
+                    event_id, blockchain_status, blockchain_tx_id, blockchain_error, blockchain_anchored_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     timestamp_str,
@@ -325,6 +347,11 @@ class AlertLogger:
                     risk_score,
                     risk_label,
                     json.dumps(risk_factors),
+                    event_id,
+                    "PENDING",
+                    None,
+                    None,
+                    None,
                 ),
             )
             conn.execute(
@@ -355,7 +382,77 @@ class AlertLogger:
             camera_id,
             chain_hash[:8],
         )
+
+        threading.Thread(
+            target=self._anchor_blockchain,
+            args=(event_id, camera_id, gid, alert_type, timestamp_str, direction or "", img_hash, prev_hash, incident_dir),
+            name=f"fabric-anchor-{event_id}",
+            daemon=True,
+        ).start()
         return str(filepath)
+
+    def _anchor_blockchain(
+        self,
+        event_id: str,
+        camera_id: str,
+        global_id: int,
+        event_type: str,
+        timestamp: str,
+        direction: str,
+        image_hash: str,
+        previous_hash: str,
+        incident_dir: Path,
+    ) -> None:
+        result = self.blockchain.record_evidence(
+            event_id=event_id,
+            camera_id=camera_id,
+            global_id=global_id,
+            event_type=event_type,
+            timestamp=timestamp,
+            direction=direction,
+            evidence_sha256=image_hash,
+            previous_hash=previous_hash,
+        )
+        status = str(result.get("status", "FAILED"))
+        tx_id = result.get("transaction_id")
+        error = result.get("error")
+        anchored_at = time.time() if status == "ANCHORED" else None
+
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE security_alerts
+                SET blockchain_status = ?,
+                    blockchain_tx_id = ?,
+                    blockchain_error = ?,
+                    blockchain_anchored_at = ?
+                WHERE event_id = ?
+                """,
+                (status, tx_id, error, anchored_at, event_id),
+            )
+            meta_path = incident_dir / "meta.json"
+            try:
+                payload = json.loads(meta_path.read_text(encoding="utf-8"))
+                payload.update(
+                    {
+                        "blockchain_status": status,
+                        "blockchain_tx_id": tx_id,
+                        "blockchain_error": error,
+                        "blockchain_anchored_at": anchored_at,
+                    }
+                )
+                meta_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            except (OSError, json.JSONDecodeError):
+                pass
+            conn.commit()
+
+        if status == "ANCHORED":
+            LOGGER.info("[FABRIC] %s anchored as %s", event_id, tx_id)
+        else:
+            LOGGER.warning("[FABRIC] %s not anchored: %s", event_id, error or status)
+
+    def blockchain_status(self) -> dict:
+        return self.blockchain.status()
 
     def log_secure_event(
         self,
