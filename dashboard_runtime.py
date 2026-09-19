@@ -436,6 +436,7 @@ class PerceptionController:
             "gallery": self.gallery.active_count(),
             "evidence_ledger": evidence_ledger,
             "metadata_ledger": dashboard_ledger,
+            "blockchain": self.alert_logger.blockchain_status(),
         }
 
     def stop(self) -> None:
