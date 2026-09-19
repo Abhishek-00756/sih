@@ -57,6 +57,7 @@ function renderCameras(cameras) {
         <div class="tripwire-bar">
           <span class="tripwire-state ${hasWire ? 'set' : ''}">${hasWire ? 'LINE CONFIGURED' : 'NO LINE CONFIGURED'}</span>
           <div class="tripwire-actions">
+            <button class="line-btn qr-btn" data-camera-pair="${esc(cam.camera_id)}">QR PAIR</button>
             <button class="line-btn" data-tripwire-edit="${esc(cam.camera_id)}">${hasWire ? 'EDIT LINE' : 'DRAW LINE'}</button>
             ${hasWire ? `<button class="line-btn danger" data-tripwire-clear="${esc(cam.camera_id)}">CLEAR</button>` : ''}
           </div>
@@ -80,6 +81,7 @@ function renderCameras(cameras) {
   grid.querySelectorAll('input[data-ai]').forEach(input => input.addEventListener('change', async e => {
     await updateCamera(e.target.dataset.ai, {ai_enabled: e.target.checked});
   }));
+  grid.querySelectorAll('[data-camera-pair]').forEach(btn => btn.addEventListener('click', () => openPairModal(btn.dataset.cameraPair)));
   grid.querySelectorAll('[data-tripwire-edit]').forEach(btn => btn.addEventListener('click', () => beginTripwireEdit(btn.dataset.tripwireEdit)));
   grid.querySelectorAll('[data-tripwire-clear]').forEach(btn => btn.addEventListener('click', () => clearTripwire(btn.dataset.tripwireClear)));
   cameras.forEach(cam => drawSavedTripwire(cam));
@@ -310,13 +312,17 @@ function renderAlerts(alerts) {
   }).join('');
 }
 
-function openPairModal() {
+function openPairModal(cameraId = null) {
   document.getElementById('pairModal').classList.remove('hidden');
   const select = document.getElementById('pairCamera');
   select.innerHTML = state.cameras.map(c => `<option value="${esc(c.camera_id)}">${esc(c.camera_id)} · ${esc(c.name)}</option>`).join('');
   select.onchange = resetPairModal;
   const preferred = state.cameras.find(c => !c.enabled || c.status === 'DISABLED' || c.status === 'WAITING FOR PHONE');
-  if (preferred) select.value = preferred.camera_id;
+  if (cameraId && state.cameras.some(c => c.camera_id === cameraId)) {
+    select.value = cameraId;
+  } else if (preferred) {
+    select.value = preferred.camera_id;
+  }
   resetPairModal();
 }
 
