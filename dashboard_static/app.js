@@ -1,4 +1,4 @@
-const state = { cameras: [], pairing: null, editingTripwire: null };
+const state = { cameras: [], pairing: null, editingTripwire: null, alerts: [] };
 
 function esc(value) {
   return String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
@@ -16,7 +16,8 @@ async function loadState() {
     state.cameras = data.cameras || [];
     if (!state.editingTripwire) renderCameras(state.cameras);
     renderFace(data.face_recognition || {});
-    renderLedger(data.ledger || {});
+    renderLedger(data.ledger || {}, data.security_ledger || {});
+    await loadAlerts();
     const online = state.cameras.filter(c => c.enabled && c.status === 'ONLINE').length;
     const total = state.cameras.length;
     const dot = document.getElementById('systemDot');
@@ -257,13 +258,56 @@ function renderFace(face) {
     .catch(console.error);
 }
 
-function renderLedger(ledger) {
-  const ok = ledger.valid === true;
+function renderLedger(metadataLedger, evidenceLedger) {
+  const metadataOk = metadataLedger.valid === true;
+  const evidenceOk = evidenceLedger.ok === true;
+  const ok = metadataOk && evidenceOk;
   const badge = document.getElementById('ledgerStatus');
-  badge.textContent = ok ? 'CHAIN VALID' : 'CHECK LEDGER';
+  badge.textContent = ok ? 'CHAINS VALID' : 'CHECK SECURITY';
   badge.className = `badge ${ok ? 'good' : 'warn'}`;
-  document.getElementById('ledgerBlocks').textContent = ledger.blocks ?? '0';
-  document.getElementById('ledgerHead').textContent = ledger.head_hash ? ledger.head_hash.slice(0, 24) + '…' : '—';
+  document.getElementById('ledgerBlocks').textContent = metadataLedger.blocks ?? '0';
+  document.getElementById('evidenceLedgerBlocks').textContent = evidenceLedger.blocks ?? '0';
+  document.getElementById('ledgerHead').textContent = metadataLedger.head_hash ? metadataLedger.head_hash.slice(0, 24) + '…' : '—';
+  document.getElementById('evidenceLedgerState').textContent = evidenceOk ? 'INTACT' : 'TAMPER CHECK';
+}
+
+function formatAlertTime(value) {
+  const date = new Date(Number(value) * 1000);
+  return Number.isNaN(date.getTime()) ? String(value ?? '—') : date.toLocaleTimeString();
+}
+
+async function loadAlerts() {
+  try {
+    const res = await fetch('/api/alerts/recent?limit=12', {cache:'no-store'});
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to load alerts');
+    state.alerts = data.alerts || [];
+    const stats = data.stats || {};
+    document.getElementById('alertCount').textContent = String(stats.total ?? state.alerts.length);
+    renderAlerts(state.alerts);
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+function renderAlerts(alerts) {
+  const list = document.getElementById('alertList');
+  if (!alerts.length) {
+    list.innerHTML = '<div class="muted">No intrusion events recorded yet.</div>';
+    return;
+  }
+  list.innerHTML = alerts.map(a => {
+    const direction = a.direction ? ` · ${esc(a.direction)}` : '';
+    const risk = a.risk_score != null ? `RISK ${esc(a.risk_score)} · ${esc(a.risk_label || '')}` : '';
+    return `<div class="alert-row">
+      <div class="alert-main">
+        <strong>${esc(a.alert_type)}</strong>
+        <span>${esc(a.camera_id)} · GID ${esc(a.global_id)}${direction}</span>
+        <small>${esc(formatAlertTime(a.unix_time))} ${risk}</small>
+      </div>
+      <a class="alert-evidence" href="/api/alerts/${encodeURIComponent(a.id)}/snapshot" target="_blank" rel="noopener">VIEW EVIDENCE</a>
+    </div>`;
+  }).join('');
 }
 
 function openPairModal() {
@@ -378,5 +422,6 @@ function tick() {
 
 setInterval(tick, 1000);
 setInterval(loadState, 3000);
+setInterval(loadAlerts, 2000);
 tick();
 loadState();
