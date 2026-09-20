@@ -148,6 +148,9 @@ class CameraView:
     def _run(self) -> None:
         cap: Optional[cv2.VideoCapture] = None
         last_source = None
+        file_fps = 0.0
+        next_frame_time = 0.0
+
         while not self._stop.is_set():
             if not self.enabled:
                 if cap is not None:
@@ -168,31 +171,56 @@ class CameraView:
                 continue
 
             resolved = self._resolve_source(self.source)
+            is_file_source = isinstance(resolved, str) and Path(resolved).is_file()
+
             if cap is None or last_source != self.source or not cap.isOpened():
                 if cap is not None:
                     cap.release()
+
                 last_source = self.source
                 cap = cv2.VideoCapture(resolved)
+
                 if not cap.isOpened():
                     with self._lock:
                         self._status = "OFFLINE"
                     time.sleep(1.0)
                     continue
 
+                # For prerecorded videos, preserve the original playback rate.
+                # Live streams/webcams are intentionally left unrestricted.
+                if is_file_source:
+                    detected_fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+                    file_fps = detected_fps if 1.0 <= detected_fps <= 120.0 else 30.0
+                    next_frame_time = time.monotonic()
+
+            # Pace prerecorded files to their native FPS.
+            if is_file_source and file_fps > 0:
+                now_mono = time.monotonic()
+                if now_mono < next_frame_time:
+                    time.sleep(next_frame_time - now_mono)
+                next_frame_time += 1.0 / file_fps
+
             ok, frame = cap.read()
             if not ok or frame is None:
-                if isinstance(resolved, str) and Path(resolved).exists():
+                if is_file_source:
                     cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    time.sleep(0.03)
+                    next_frame_time = time.monotonic() + (1.0 / max(file_fps, 1.0))
+                    time.sleep(0.01)
                     continue
+
                 with self._lock:
                     self._status = "NO FRAME"
                 time.sleep(0.2)
                 continue
 
-            ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+            ok, encoded = cv2.imencode(
+                ".jpg",
+                frame,
+                [int(cv2.IMWRITE_JPEG_QUALITY), 82],
+            )
             if not ok:
                 continue
+
             with self._lock:
                 self._frame = frame
                 self._raw_jpeg = encoded.tobytes()

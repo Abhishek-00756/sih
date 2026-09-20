@@ -29,6 +29,8 @@ tripwires:
 alert_db: border_alerts.db
 snapshot_dir: alert_snapshots
 geofence_camera_map:
+  CAM-01: cam_01
+  CAM-02: cam_02
   Cam_1_Outpost: cam_01
   Cam_2_Gate: cam_02
   Sector_Alpha: cam_01

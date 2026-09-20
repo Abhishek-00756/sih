@@ -2,9 +2,9 @@
   "cameras": {
     "CAM-01": {
       "name": "Outpost Alpha",
-      "source": "0",
-      "enabled": false,
-      "ai_enabled": false,
+      "source": "videos/cam1.mp4",
+      "enabled": true,
+      "ai_enabled": true,
       "features": {
         "geofence": true,
         "tripwire": true,
@@ -12,33 +12,63 @@
         "face_recognition": true,
         "enhancement": true
       },
-      "tripwires": []
+      "tripwires": [
+        {
+          "id": "primary",
+          "pt1": [
+            0.26598988230083975,
+            0.750016560020137
+          ],
+          "pt2": [
+            0.5734044184026299,
+            0.7577685420179756
+          ],
+          "normalized": true,
+          "inbound_positive": true,
+          "cooldown_seconds": 60.0
+        }
+      ]
     },
     "CAM-02": {
       "name": "Gate Bravo",
-      "source": "0",
-      "enabled": false,
-      "ai_enabled": false,
+      "source": "videos/cam2.mp4",
+      "enabled": true,
+      "ai_enabled": true,
       "features": {
         "geofence": true,
-        "tripwire": false,
-        "anpr": true,
-        "face_recognition": false,
-        "enhancement": false
+        "tripwire": true,
+        "anpr": false,
+        "face_recognition": true,
+        "enhancement": true
       },
-      "tripwires": []
+      "tripwires": [
+        {
+          "id": "primary",
+          "pt1": [
+            0.504369006455569,
+            0.5116187556083829
+          ],
+          "pt2": [
+            0.5130899862031375,
+            0.9912361522696406
+          ],
+          "normalized": true,
+          "inbound_positive": true,
+          "cooldown_seconds": 60.0
+        }
+      ]
     },
     "CAM-03": {
       "name": "Sector Charlie",
-      "source": "0",
-      "enabled": false,
-      "ai_enabled": false,
+      "source": "videos/cam3.mp4",
+      "enabled": true,
+      "ai_enabled": true,
       "features": {
-        "geofence": false,
-        "tripwire": false,
+        "geofence": true,
+        "tripwire": true,
         "anpr": false,
-        "face_recognition": false,
-        "enhancement": false
+        "face_recognition": true,
+        "enhancement": true
       },
       "tripwires": []
     }

@@ -190,3 +190,12 @@ face_database/
 
 # Fabric local build output
 blockchain/chaincode/evidence-contract/bin/
+
+# Local face recognition registry and demo data
+face_registry/
+# Local backup copies
+*.backup*
+
+# Fabric build artifacts
+blockchain/chaincode/evidence-contract/evidence-contract
+blockchain/chaincode/evidence-contract/vendor/

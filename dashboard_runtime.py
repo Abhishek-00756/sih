@@ -41,6 +41,8 @@ class PerceptionController:
         self.geofence_managers: Dict[str, GeofenceManager] = {}
         self.last_sequences: Dict[str, int] = {}
         self.last_alerts: Dict[Tuple[str, int, str], float] = {}
+        self.face_identity_cache: Dict[int, Tuple[float, dict]] = {}
+        self.face_identity_ttl = 8.0
         self.last_error: Optional[str] = None
         self.started_at = time.time()
         self.metrics = {cid: {"processed_frames": 0, "persons": 0, "vehicles": 0,
@@ -215,38 +217,96 @@ class PerceptionController:
         return mgr
 
     def _match_face(self, crop: np.ndarray) -> Optional[dict]:
-        if self.face_registry is None:
+        """Match a face using multiple views of the detected person crop.
+
+        Distant CCTV subjects often have a small face inside a much larger
+        person bounding box. Try the original crop plus several upper-body
+        crops and resized variants so InsightFace gets a usable face region.
+        """
+        if self.face_registry is None or crop is None or crop.size == 0:
             return None
+
         try:
             status = self.face_registry.status() or {}
             if status.get("available") is False:
                 return None
         except Exception:
             pass
-        for name in ("match", "recognize", "recognize_face", "match_face"):
-            fn = getattr(self.face_registry, name, None)
-            if not callable(fn):
-                continue
-            try:
-                result = fn(crop)
-            except Exception as exc:
-                LOGGER.debug("Face match failed: %s", exc)
-                return None
-            if isinstance(result, dict):
-                who = result.get("display_name") or result.get("name") or result.get("person_name")
-                if not who:
-                    return None
+
+        candidates = [crop]
+
+        h, w = crop.shape[:2]
+        if h >= 40 and w >= 40:
+            # Face/head is normally in the upper part of a standing person box.
+            for ratio in (0.55, 0.70):
+                y2 = max(1, int(h * ratio))
+                head = crop[:y2, :]
+                if head.size:
+                    candidates.append(head)
+
+                    # Upscaling helps when the original CCTV face is small.
+                    enlarged = cv2.resize(
+                        head,
+                        None,
+                        fx=2.0,
+                        fy=2.0,
+                        interpolation=cv2.INTER_CUBIC,
+                    )
+                    candidates.append(enlarged)
+
+        best_result = None
+        best_conf = -1.0
+
+        for candidate in candidates:
+            for name in ("match", "recognize", "recognize_face", "match_face"):
+                fn = getattr(self.face_registry, name, None)
+                if not callable(fn):
+                    continue
+
                 try:
-                    conf = float(result.get("confidence", result.get("similarity", 0.0)))
-                except (TypeError, ValueError):
-                    conf = 0.0
-                return {"display_name": str(who), "confidence": conf}
-            if isinstance(result, (tuple, list)) and len(result) >= 2:
-                try:
-                    return {"display_name": str(result[0]), "confidence": float(result[1])}
-                except (TypeError, ValueError):
-                    return None
-        return None
+                    result = fn(candidate)
+                except Exception as exc:
+                    LOGGER.debug("Face match failed: %s", exc)
+                    continue
+
+                if isinstance(result, dict):
+                    who = (
+                        result.get("display_name")
+                        or result.get("name")
+                        or result.get("person_name")
+                    )
+                    if not who:
+                        continue
+                    try:
+                        conf = float(
+                            result.get(
+                                "confidence",
+                                result.get("similarity", 0.0),
+                            )
+                        )
+                    except (TypeError, ValueError):
+                        conf = 0.0
+
+                    if conf > best_conf:
+                        best_conf = conf
+                        best_result = {
+                            "display_name": str(who),
+                            "confidence": conf,
+                        }
+
+                elif isinstance(result, (tuple, list)) and len(result) >= 2:
+                    try:
+                        conf = float(result[1])
+                        if conf > best_conf:
+                            best_conf = conf
+                            best_result = {
+                                "display_name": str(result[0]),
+                                "confidence": conf,
+                            }
+                    except (TypeError, ValueError):
+                        continue
+
+        return best_result
 
     @staticmethod
     def _inside(point: Tuple[int, int], polygon: Any) -> bool:
@@ -330,6 +390,14 @@ class PerceptionController:
                 wire.draw(work, color=(0, 210, 255), thickness=2)
         extractor = self._ensure_extractor()
         now = time.time()
+
+        # Keep a recent face recognition result attached to the Global ID.
+        # CCTV faces may disappear for several frames due to pose/blur/size,
+        # even though the tracked person is still the same identity.
+        for cached_gid, (seen_at, _) in list(self.face_identity_cache.items()):
+            if now - seen_at > self.face_identity_ttl:
+                self.face_identity_cache.pop(cached_gid, None)
+
         if results and results[0].boxes is not None and results[0].boxes.id is not None:
             boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
             tids = results[0].boxes.id.cpu().numpy().astype(int)
@@ -349,7 +417,27 @@ class PerceptionController:
                     gid=int(match.global_id); gids.add(gid); persons += 1
                     label=f"PERSON GID {gid}"
                     if features.get("face_recognition", False):
-                        face=self._match_face(crop)
+                        # Give InsightFace extra context around the tracked person.
+                        # This helps when the face is small/near the edge of a
+                        # tight YOLO person bounding box.
+                        pad_x = max(8, int((x2 - x1) * 0.20))
+                        pad_y = max(8, int((y2 - y1) * 0.20))
+                        fx1 = max(0, x1 - pad_x)
+                        fy1 = max(0, y1 - pad_y)
+                        fx2 = min(work.shape[1], x2 + pad_x)
+                        fy2 = min(work.shape[0], y2 + pad_y)
+                        face_crop = work[fy1:fy2, fx1:fx2]
+
+                        face=self._match_face(face_crop)
+
+                        # Persist a successful recognition against the Global ID.
+                        if face:
+                            self.face_identity_cache[gid] = (now, face)
+                        else:
+                            cached = self.face_identity_cache.get(gid)
+                            if cached and now - cached[0] <= self.face_identity_ttl:
+                                face = cached[1]
+
                         if face:
                             face_matches += 1
                             label += f" | {face['display_name']} {face['confidence']:.0%}"
